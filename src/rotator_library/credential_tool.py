@@ -65,6 +65,7 @@ OAUTH_FRIENDLY_NAMES = {
     "qwen_code": "Qwen Code",
     "iflow": "iFlow",
     "antigravity": "Antigravity",
+    "openai_chatgpt": "OpenAI ChatGPT Plus",
 }
 
 
@@ -285,7 +286,13 @@ def _get_oauth_credentials_summary() -> dict:
         Example: {"gemini_cli": [{"email": "user@example.com", "tier": "free-tier", ...}, ...]}
     """
     provider_factory, _ = _ensure_providers_loaded()
-    oauth_providers = ["gemini_cli", "qwen_code", "iflow", "antigravity"]
+    oauth_providers = [
+        "gemini_cli",
+        "qwen_code",
+        "iflow",
+        "antigravity",
+        "openai_chatgpt",
+    ]
     oauth_summary = {}
 
     for provider_name in oauth_providers:
@@ -1216,6 +1223,7 @@ async def setup_api_key():
         "antigravity",  # OAuth-only
         "qwen_code",  # OAuth is primary, don't advertise API key
         "iflow",  # OAuth is primary
+        "openai_chatgpt",  # OAuth-only
     }
 
     # Base classes to exclude
@@ -1734,6 +1742,7 @@ async def setup_new_credential(provider_name: str):
             "qwen_code": "Qwen Code (OAuth - also supports API keys)",
             "iflow": "iFlow (OAuth - also supports API keys)",
             "antigravity": "Antigravity (OAuth)",
+            "openai_chatgpt": "OpenAI ChatGPT Plus (OAuth)",
         }
         display_name = oauth_friendly_names.get(
             provider_name, provider_name.replace("_", " ").title()
@@ -2329,7 +2338,13 @@ async def combine_all_credentials():
     clear_screen("Combine All Credentials")
 
     # List of providers that support OAuth credentials
-    oauth_providers = ["gemini_cli", "qwen_code", "iflow", "antigravity"]
+    oauth_providers = [
+        "gemini_cli",
+        "qwen_code",
+        "iflow",
+        "antigravity",
+        "openai_chatgpt",
+    ]
 
     provider_factory, _ = _ensure_providers_loaded()
 
