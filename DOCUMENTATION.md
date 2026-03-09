@@ -96,6 +96,68 @@ The `_safe_streaming_wrapper` is a critical component for stability. It:
 *   **Error Interception**: Detects if a chunk contains an API error (like a quota limit) instead of content, and raises a specific `StreamedAPIError`.
 *   **Quota Handling**: If a specific "quota exceeded" error is detected mid-stream multiple times, it can terminate the stream gracefully to prevent infinite retry loops on oversized inputs.
 
+#### Weighted-Router Alias Resolution
+
+The `_resolve_weighted_alias_model()` method enables stable model aliases that auto-resolve to provider-specific IDs based on weighted random selection.
+
+**Purpose:**
+- Abstract provider-specific model IDs behind simple aliases (e.g., `glm-5`, `kimi-k2.5`)
+- Distribute load across multiple providers automatically
+- Enable high availability without client-side provider awareness
+
+**Implementation:**
+
+1. **Alias Map**: Defines model aliases and their provider-specific mappings
+   ```python
+   alias_map = {
+       "glm-5": {
+           "ollama_cloud": "ollama_cloud/glm-5",
+           "opencode_go": "opencode_go/glm-5",
+           "chutes": "chutes/zai-org/GLM-5-TEE",
+       },
+       # ... more aliases
+   }
+   ```
+
+2. **Weighted Providers**: Provider preference order with weights
+   ```python
+   weighted_providers = [
+       ("ollama_cloud", 0.7),  # 70% preference
+       ("opencode_go", 0.15),  # 15% preference
+       ("chutes", 0.15),       # 15% preference
+   ]
+   ```
+
+3. **Availability Check**: Only considers providers with available credentials
+   ```python
+   available = [
+       (provider, weight)
+       for provider, weight in weighted_providers
+       if provider in self.all_credentials and provider in provider_models
+   ]
+   ```
+
+4. **Weighted Selection**: Uses weighted random algorithm to select provider
+   - Accumulates weights and picks random value
+   - Returns provider-specific model ID for selected provider
+
+**Integration Point:**
+Called at the start of `acompletion()` before request routing:
+```python
+model = kwargs.get("model", "")
+if "/" not in model:
+    resolved_alias_model = self._resolve_weighted_alias_model(model)
+    if resolved_alias_model != model:
+        lib_logger.info(f"Resolved bare alias model '{model}' to '{resolved_alias_model}'")
+        kwargs["model"] = resolved_alias_model
+```
+
+**Benefits:**
+- Clients use simple names without provider knowledge
+- Automatic failover when providers are unavailable
+- Load distribution based on provider reliability/performance
+- Zero client-side configuration changes when switching providers
+
 ### 2.2. `usage_manager.py` - Stateful Concurrency & Usage Management
 
 This class is the stateful core of the library, managing concurrency, usage tracking, cooldowns, and quota resets.
@@ -1925,4 +1987,94 @@ The GUI modifies the same environment variables that the `RotatingClient` reads:
 3. **Proxy applies rules** → `get_available_models()` filters based on rules
 
 **Note**: The proxy must be restarted to pick up rule changes made via the GUI (or use the Launcher TUI's reload functionality if available).
+
+---
+
+## 7. Recent Enhancements (2026-03)
+
+### 7.1. Credential Exhaustion Detection and HTTP 503
+
+**Purpose:** Improve error handling when all credentials are exhausted, enabling clients to implement intelligent retry strategies.
+
+**New Exception:** `AllCredentialsExhaustedError` (error_handler.py)
+- Carries structured error response for client consumption
+- Signals definitive exhaustion vs transient failures
+- Enables HTTP 503 Service Unavailable response
+
+**Mid-Stream Exhaustion Detection:**
+The `_safe_streaming_wrapper` now monitors streaming chunks for exhaustion signals:
+- Detects: `rate_limit_exceeded`, `insufficient_quota`, `"error":`
+- Raises `MidStreamExhaustionError` for immediate failover
+- Enables real-time detection during active streams
+
+**HTTP Response:**
+- **Before**: Generic error details returned to client
+- **After**: HTTP 503 with structured error response
+  ```json
+  {
+    "error": {
+      "type": "service_unavailable",
+      "message": "All credentials exhausted for provider",
+      "details": {
+        "provider": "ollama_cloud",
+        "reset_time": "2026-03-10T04:00:00Z"
+      }
+    }
+  }
+  ```
+
+**Client Benefits:**
+- Distinguish between temporary failures and permanent exhaustion
+- Implement exponential backoff with reset time awareness
+- Better user experience with accurate error messages
+
+### 7.2. Exponential Backoff with Jitter for Cooldowns
+
+**Purpose:** Prevent thundering herd problems when multiple providers recover simultaneously.
+
+**Implementation:** `ExponentialBackoff` class (cooldown_manager.py)
+
+**Parameters:**
+- `base_delay`: 1.0 seconds (initial delay)
+- `max_delay`: 300.0 seconds (5 minutes max)
+- `jitter`: ±50% randomization
+- `jitter_range`: 0.5 (randomness factor)
+
+**Algorithm:**
+```python
+delay = min(base_delay * (2 ** attempt), max_delay)
+if jitter:
+    delay *= random.uniform(1 - jitter_range, 1 + jitter_range)
+```
+
+**Benefits:**
+- Staggers provider recovery attempts
+- Reduces synchronized retry waves
+- Better handling of transient rate limits
+- Prevents cascading failures under load
+
+**Example Timeline:**
+```
+Provider A fails: 1.2s cooldown (1s base ± 50% jitter)
+Provider B fails: 0.8s cooldown (1s base ± 50% jitter)
+Provider A fails again: 2.4s cooldown (2s base ± 50% jitter)
+```
+
+### 7.3. Weighted-Router Alias Model Resolution
+
+**Purpose:** Enable stable model names that auto-resolve to provider-specific IDs.
+
+See Section 2.1 "Weighted-Router Alias Resolution" for full technical details.
+
+**Quick Reference:**
+
+| Alias | Providers | Weights |
+|-------|-----------|---------|
+| `glm-5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
+| `kimi-k2.5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
+| `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
+| `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
+| `qwen3.5` | ollama_cloud, chutes | 70%, 15% |
+
+**Note:** OpenCode GO only supports glm-5, kimi-k2.5, and minimax-m2.5. Other aliases exclude opencode_go from their provider list.
 

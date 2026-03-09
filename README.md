@@ -107,6 +107,44 @@ gemini_cli/gemini-2.5-pro        ← Gemini CLI (OAuth)
 antigravity/gemini-3-pro-preview ← Antigravity (Gemini 3, Claude Opus 4.5)
 ```
 
+### Weighted-Router Aliases (NEW)
+
+**Simplify your model names with stable aliases that auto-select providers:**
+
+Instead of specifying provider-specific models, use simple aliases and let the router automatically distribute load across available providers:
+
+```bash
+# Before: Manually specify provider
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Authorization: Bearer $PROXY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "ollama_cloud/glm-5", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# After: Use stable alias with automatic provider selection
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Authorization: Bearer $PROXY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "glm-5", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+**Supported Aliases:**
+
+| Alias | Available Providers | Weights |
+|-------|---------------------|---------|
+| `glm-5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
+| `kimi-k2.5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
+| `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
+| `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
+| `qwen3.5` | ollama_cloud, chutes | 70%, 15% |
+
+**Benefits:**
+- **Provider abstraction**: Switch providers without changing client code
+- **Load distribution**: Automatic weighted selection spreads requests across providers
+- **High availability**: If one provider is down, others are automatically selected
+- **Simplified configuration**: No need to memorize provider-specific model IDs
+
+The router selects providers based on weighted random selection, preferring providers with higher weights. Only providers with available credentials are considered.
+
 ### Usage Examples
 
 <details>
