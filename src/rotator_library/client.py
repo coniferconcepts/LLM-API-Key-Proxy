@@ -1054,6 +1054,12 @@ class RotatingClient:
                     # No scary traceback needed - this is an expected recovery scenario.
                     raise StreamedAPIError("Credential needs re-authentication", data=e)
 
+                except MidStreamExhaustionError as e:
+                    lib_logger.warning(
+                        f"Mid-stream exhaustion detected for provider {e.provider} at chunk {e.chunk_index}."
+                    )
+                    raise StreamedAPIError(str(e), data=e)
+
                 except (
                     litellm.RateLimitError,
                     litellm.ServiceUnavailableError,
@@ -1973,8 +1979,10 @@ class RotatingClient:
             # Log concise summary for server logs
             lib_logger.error(error_accumulator.build_log_message())
 
-            # Return the structured error response for the client
-            return error_accumulator.build_client_error_response()
+            # Raise explicit exhaustion error so the API layer can return HTTP 503
+            raise AllCredentialsExhaustedError(
+                error_accumulator.build_client_error_response()
+            )
 
         # Return None to indicate failure without error details (shouldn't normally happen)
         lib_logger.warning(
@@ -2875,6 +2883,62 @@ class RotatingClient:
                 **kwargs,
             )
 
+    def _resolve_weighted_alias_model(self, model: str) -> str:
+        alias_map = {
+            "glm-5": {
+                "ollama_cloud": "ollama_cloud/glm-5",
+                "opencode_go": "opencode_go/glm-5",
+                "chutes": "chutes/zai-org/GLM-5-TEE",
+            },
+            "kimi-k2.5": {
+                "ollama_cloud": "ollama_cloud/kimi-k2.5",
+                "opencode_go": "opencode_go/kimi-k2.5",
+                "chutes": "chutes/moonshotai/Kimi-K2.5-TEE",
+            },
+            "qwen3-coder-next": {
+                "ollama_cloud": "ollama_cloud/qwen3-coder-next",
+                "opencode_go": "opencode_go/qwen3-coder-next",
+                "chutes": "chutes/Qwen/Qwen3-Coder-Next-TEE",
+            },
+            "minimax-m2.5": {
+                "ollama_cloud": "ollama_cloud/minimax-m2.5",
+                "opencode_go": "opencode_go/minimax-m2.5",
+                "chutes": "chutes/MiniMaxAI/MiniMax-M2.5-TEE",
+            },
+            "qwen3.5": {
+                "ollama_cloud": "ollama_cloud/qwen3.5",
+                "opencode_go": "opencode_go/qwen3.5",
+                "chutes": "chutes/Qwen/Qwen3.5-397B-A17B-TEE",
+            },
+        }
+
+        weighted_providers = [
+            ("ollama_cloud", 0.7),
+            ("opencode_go", 0.15),
+            ("chutes", 0.15),
+        ]
+
+        provider_models = alias_map.get(model)
+        if not provider_models:
+            return model
+
+        available = [
+            (provider, weight)
+            for provider, weight in weighted_providers
+            if provider in self.all_credentials and provider in provider_models
+        ]
+        if not available:
+            return model
+
+        total = sum(weight for _, weight in available)
+        pick = random.random() * total
+        for provider, weight in available:
+            pick -= weight
+            if pick <= 0:
+                return provider_models[provider]
+
+        return provider_models[available[-1][0]]
+
     def aembedding(
         self,
         request: Optional[Any] = None,
@@ -3175,7 +3239,9 @@ class RotatingClient:
                         group_stats["total_requests_remaining"] = 0
                         # Fallback to avg_remaining_pct when max_requests unavailable
                         # This handles providers like Firmware that only provide percentage
-                        group_stats["total_remaining_pct"] = group_stats.get("avg_remaining_pct")
+                        group_stats["total_remaining_pct"] = group_stats.get(
+                            "avg_remaining_pct"
+                        )
 
                     prov_stats["quota_groups"][group_name] = group_stats
 
