@@ -2897,7 +2897,6 @@ class RotatingClient:
             },
             "qwen3-coder-next": {
                 "ollama_cloud": "ollama_cloud/qwen3-coder-next",
-                "opencode_go": "opencode_go/qwen3-coder-next",
                 "chutes": "chutes/Qwen/Qwen3-Coder-Next-TEE",
             },
             "minimax-m2.5": {
@@ -2907,7 +2906,6 @@ class RotatingClient:
             },
             "qwen3.5": {
                 "ollama_cloud": "ollama_cloud/qwen3.5",
-                "opencode_go": "opencode_go/qwen3.5",
                 "chutes": "chutes/Qwen/Qwen3.5-397B-A17B-TEE",
             },
         }
