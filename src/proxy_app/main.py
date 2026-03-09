@@ -132,6 +132,7 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
 print("  → Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from rotator_library import RotatingClient
+    from rotator_library.error_handler import AllCredentialsExhaustedError
     from rotator_library.credential_manager import CredentialManager
     from rotator_library.background_refresher import BackgroundRefresher
     from rotator_library.model_info_service import init_model_info_service
@@ -997,6 +998,8 @@ async def chat_completions(
         raise HTTPException(status_code=504, detail=f"Gateway Timeout: {str(e)}")
     except (litellm.InternalServerError, litellm.OpenAIError) as e:
         raise HTTPException(status_code=502, detail=f"Bad Gateway: {str(e)}")
+    except AllCredentialsExhaustedError as e:
+        return JSONResponse(status_code=503, content=e.error_response)
     except Exception as e:
         logging.error(f"Request failed after all retries: {e}")
         # Optionally log the failed request
@@ -1255,6 +1258,8 @@ async def embeddings(
         raise HTTPException(status_code=504, detail=f"Gateway Timeout: {str(e)}")
     except (litellm.InternalServerError, litellm.OpenAIError) as e:
         raise HTTPException(status_code=502, detail=f"Bad Gateway: {str(e)}")
+    except AllCredentialsExhaustedError as e:
+        return JSONResponse(status_code=503, content=e.error_response)
     except Exception as e:
         logging.error(f"Embedding request failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -128,6 +128,18 @@ class NoAvailableKeysError(Exception):
     pass
 
 
+class AllCredentialsExhaustedError(Exception):
+    """Raised when all credentials fail and the request cannot be fulfilled."""
+
+    def __init__(self, error_response: Dict[str, Any]):
+        self.error_response = error_response
+        message = (
+            error_response.get("error", {}).get("message")
+            or "All credentials exhausted"
+        )
+        super().__init__(message)
+
+
 class PreRequestCallbackError(Exception):
     """Raised when a pre-request callback fails."""
 

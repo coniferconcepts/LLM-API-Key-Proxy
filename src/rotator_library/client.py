@@ -28,6 +28,7 @@ from .failure_logger import log_failure, configure_failure_logger
 from .error_handler import (
     PreRequestCallbackError,
     CredentialNeedsReauthError,
+    AllCredentialsExhaustedError,
     classify_error,
     NoAvailableKeysError,
     should_rotate_on_error,
@@ -62,6 +63,19 @@ class StreamedAPIError(Exception):
     def __init__(self, message, data=None):
         super().__init__(message)
         self.data = data
+
+
+class MidStreamExhaustionError(Exception):
+    """Raised when credentials are exhausted mid-stream.
+
+    This allows the router to detect exhaustion during streaming
+    and trigger immediate failover.
+    """
+
+    def __init__(self, provider: str, message: str, chunk_index: int = 0):
+        self.provider = provider
+        self.chunk_index = chunk_index
+        super().__init__(message)
 
 
 class RotatingClient:
@@ -925,6 +939,8 @@ class RotatingClient:
         json_buffer = ""
         accumulated_finish_reason = None  # Track strongest finish_reason across chunks
         has_tool_calls = False  # Track if ANY tool calls were seen in stream
+        chunk_count = 0
+        provider = model.split("/")[0] if "/" in model else "unknown"
 
         try:
             while True:
@@ -936,11 +952,34 @@ class RotatingClient:
 
                 try:
                     chunk = await stream_iterator.__anext__()
+                    chunk_count += 1
                     if json_buffer:
                         lib_logger.warning(
                             f"Discarding incomplete JSON buffer from previous chunk: {json_buffer}"
                         )
                         json_buffer = ""
+
+                    # Check for mid-stream exhaustion signals
+                    chunk_str = (
+                        chunk.decode("utf-8")
+                        if isinstance(chunk, bytes)
+                        else str(chunk)
+                    )
+                    if any(
+                        signal in chunk_str
+                        for signal in [
+                            '"error":',
+                            "exhausted",
+                            "rate_limit_exceeded",
+                            "insufficient_quota",
+                        ]
+                    ):
+                        # Parse the error and raise MidStreamExhaustionError
+                        raise MidStreamExhaustionError(
+                            provider=provider,
+                            message=f"Mid-stream exhaustion detected at chunk {chunk_count}",
+                            chunk_index=chunk_count,
+                        )
 
                     # Convert chunk to dict, handling both litellm.ModelResponse and raw dicts
                     if hasattr(chunk, "dict"):
@@ -2798,6 +2837,15 @@ class RotatingClient:
         Returns:
             The completion response object, or an async generator for streaming responses, or None if all retries fail.
         """
+        model = kwargs.get("model", "")
+        if "/" not in model:
+            resolved_alias_model = self._resolve_weighted_alias_model(model)
+            if resolved_alias_model != model:
+                lib_logger.info(
+                    f"Resolved bare alias model '{model}' to '{resolved_alias_model}'"
+                )
+                kwargs["model"] = resolved_alias_model
+
         # Handle iflow provider: remove stream_options to avoid HTTP 406
         model = kwargs.get("model", "")
         provider = model.split("/")[0] if "/" in model else ""
