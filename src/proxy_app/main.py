@@ -366,10 +366,17 @@ PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 # Note: PROXY_API_KEY validation moved to server startup to allow credential tool to run first
 
 # Discover API keys from environment variables
+# Supports both _API_KEY and _KEY suffixes (e.g., CHUTES_API_KEY or OPENROUTER_ZDR_KEY)
 api_keys = {}
 for key, value in os.environ.items():
+    provider = None
     if "_API_KEY" in key and key != "PROXY_API_KEY":
         provider = key.split("_API_KEY")[0].lower()
+    elif key.endswith("_KEY") and key not in ["PROXY_API_KEY", "MIRROWEL_PROXY_KEY"]:
+        # Handle variables like OPENROUTER_ZDR_KEY, OPENCODE_GO_KEY, etc.
+        provider = key[:-4].lower()  # Remove '_KEY' suffix
+
+    if provider and value:
         if provider not in api_keys:
             api_keys[provider] = []
         api_keys[provider].append(value)
