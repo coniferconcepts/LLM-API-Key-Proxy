@@ -2908,6 +2908,11 @@ class RotatingClient:
                 "ollama_cloud": "ollama_cloud/qwen3.5",
                 "chutes": "chutes/Qwen/Qwen3.5-397B-A17B-TEE",
             },
+            # DeepSeek V3.2: 90% Ollama Cloud, 10% Chutes
+            "deepseek": {
+                "ollama_cloud": "ollama_cloud/deepseek-v3.2:cloud",
+                "chutes": "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
+            },
         }
 
         weighted_providers = [

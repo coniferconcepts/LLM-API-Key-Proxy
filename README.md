@@ -136,6 +136,7 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 | `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
 | `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
 | `qwen3.5` | ollama_cloud, chutes | 70%, 15% |
+| `deepseek` | ollama_cloud, chutes | 90%, 10% |
 
 **Benefits:**
 - **Provider abstraction**: Switch providers without changing client code

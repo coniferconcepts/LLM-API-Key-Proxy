@@ -2075,6 +2075,7 @@ See Section 2.1 "Weighted-Router Alias Resolution" for full technical details.
 | `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
 | `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
 | `qwen3.5` | ollama_cloud, chutes | 70%, 15% |
+| `deepseek` | ollama_cloud, chutes | 90%, 10% |
 
 **Note:** OpenCode GO only supports glm-5, kimi-k2.5, and minimax-m2.5. Other aliases exclude opencode_go from their provider list.
 

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `qwen3-coder-next` → ollama_cloud/qwen3-coder-next, chutes/Qwen/Qwen3-Coder-Next-TEE
   - `minimax-m2.5` → ollama_cloud/minimax-m2.5, opencode_go/minimax-m2.5, chutes/MiniMaxAI/MiniMax-M2.5-TEE
   - `qwen3.5` → ollama_cloud/qwen3.5, chutes/Qwen/Qwen3.5-397B-A17B-TEE
+  - `deepseek` → ollama_cloud/deepseek-v3.2:cloud, chutes/deepseek-ai/DeepSeek-V3.2-TEE
 
 #### Enhanced Credential Exhaustion Handling
 - **Mid-stream exhaustion detection**: Real-time monitoring of streaming chunks for quota exhaustion signals
