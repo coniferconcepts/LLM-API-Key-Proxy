@@ -28,6 +28,7 @@ ENV_OAUTH_PROVIDERS = {
     "antigravity": "ANTIGRAVITY",
     "qwen_code": "QWEN_CODE",
     "iflow": "IFLOW",
+    "openai_chatgpt": "OPENAI_CHATGPT",
 }
 
 
