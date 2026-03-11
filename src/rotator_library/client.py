@@ -9,6 +9,7 @@ import codecs
 import time
 import os
 import random
+import yaml
 import httpx
 import litellm
 from litellm.exceptions import APIConnectionError
@@ -22,6 +23,14 @@ lib_logger = logging.getLogger("rotator_library")
 # which is set up in main.py. This allows the main app to control
 # log levels and handlers centrally.
 lib_logger.propagate = False
+
+DIRECT_MODEL_TOKEN_FLOORS = {
+    "glm-5": 256,
+    "kimi-k2.5": 128,
+    "minimax-m2.5": 128,
+    "qwen3.5": 256,
+    "qwen3.5-cloud": 512,
+}
 
 from .usage_manager import UsageManager
 from .failure_logger import log_failure, configure_failure_logger
@@ -186,6 +195,7 @@ class RotatingClient:
         for provider, paths in self.oauth_credentials.items():
             all_credentials.setdefault(provider, []).extend(paths)
         self.all_credentials = all_credentials
+        self._weighted_alias_map = self._load_weighted_alias_map()
 
         self.max_retries = max_retries
         self.global_timeout = global_timeout
@@ -2854,6 +2864,8 @@ class RotatingClient:
                 )
                 kwargs["model"] = resolved_alias_model
 
+        kwargs = self._apply_model_token_floor(kwargs)
+
         # Handle iflow provider: remove stream_options to avoid HTTP 406
         model = kwargs.get("model", "")
         provider = model.split("/")[0] if "/" in model else ""
@@ -2883,64 +2895,118 @@ class RotatingClient:
                 **kwargs,
             )
 
+    def _apply_model_token_floor(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Raise token budgets for reasoning-heavy models on direct provider calls."""
+        model = kwargs.get("model")
+        if not isinstance(model, str) or not model:
+            return kwargs
+
+        model_key = self._get_token_floor_model_key(model)
+        minimum = DIRECT_MODEL_TOKEN_FLOORS.get(model_key)
+        if not minimum:
+            return kwargs
+
+        updated = kwargs.copy()
+        changed_fields = []
+
+        for field in ("max_tokens", "max_completion_tokens"):
+            value = updated.get(field)
+            if isinstance(value, int) and value < minimum:
+                updated[field] = minimum
+                changed_fields.append(field)
+
+        if changed_fields:
+            lib_logger.info(
+                f"Raised {', '.join(changed_fields)} to {minimum} for model {model}"
+            )
+
+        return updated
+
+    def _get_token_floor_model_key(self, model: str) -> Optional[str]:
+        model_lower = model.lower()
+
+        if "qwen3.5:cloud" in model_lower or "qwen3.5-397b-a17b-tee" in model_lower:
+            return "qwen3.5-cloud"
+        if "glm-5" in model_lower:
+            return "glm-5"
+        if "kimi-k2.5" in model_lower:
+            return "kimi-k2.5"
+        if "minimax-m2.5" in model_lower:
+            return "minimax-m2.5"
+        if "qwen3.5" in model_lower:
+            return "qwen3.5"
+
+        return None
+
     def _resolve_weighted_alias_model(self, model: str) -> str:
-        alias_map = {
-            "glm-5": {
-                "ollama_cloud": "ollama_cloud/glm-5",
-                "opencode_go": "opencode_go/glm-5",
-                "chutes": "chutes/zai-org/GLM-5-TEE",
-            },
-            "kimi-k2.5": {
-                "ollama_cloud": "ollama_cloud/kimi-k2.5",
-                "opencode_go": "opencode_go/kimi-k2.5",
-                "chutes": "chutes/moonshotai/Kimi-K2.5-TEE",
-            },
-            "qwen3-coder-next": {
-                "ollama_cloud": "ollama_cloud/qwen3-coder-next",
-                "chutes": "chutes/Qwen/Qwen3-Coder-Next-TEE",
-            },
-            "minimax-m2.5": {
-                "ollama_cloud": "ollama_cloud/minimax-m2.5",
-                "opencode_go": "opencode_go/minimax-m2.5",
-                "chutes": "chutes/MiniMaxAI/MiniMax-M2.5-TEE",
-            },
-            "qwen3.5": {
-                "ollama_cloud": "ollama_cloud/qwen3.5",
-                "chutes": "chutes/Qwen/Qwen3.5-397B-A17B-TEE",
-            },
-            # DeepSeek V3.2: 90% Ollama Cloud, 10% Chutes
-            "deepseek": {
-                "ollama_cloud": "ollama_cloud/deepseek-v3.2:cloud",
-                "chutes": "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
-            },
-        }
-
-        weighted_providers = [
-            ("ollama_cloud", 0.7),
-            ("opencode_go", 0.15),
-            ("chutes", 0.15),
-        ]
-
-        provider_models = alias_map.get(model)
-        if not provider_models:
+        weighted_entries = self._weighted_alias_map.get(model)
+        if not weighted_entries:
             return model
 
         available = [
-            (provider, weight)
-            for provider, weight in weighted_providers
-            if provider in self.all_credentials and provider in provider_models
+            entry
+            for entry in weighted_entries
+            if entry[0] in self.all_credentials and self.all_credentials[entry[0]]
         ]
         if not available:
             return model
 
-        total = sum(weight for _, weight in available)
+        total = sum(weight for _, _, weight in available)
         pick = random.random() * total
-        for provider, weight in available:
+        for _, provider_model, weight in available:
             pick -= weight
             if pick <= 0:
-                return provider_models[provider]
+                return provider_model
 
-        return provider_models[available[-1][0]]
+        return available[-1][1]
+
+    def _load_weighted_alias_map(self) -> Dict[str, List[Tuple[str, str, float]]]:
+        candidate_files = [
+            self.data_dir / "model_aliases.yaml",
+            self.data_dir.parent / "model_aliases.yaml",
+        ]
+
+        alias_file = next((path for path in candidate_files if path.exists()), None)
+        if alias_file is None:
+            lib_logger.info(
+                "Weighted alias config not found in data dir or parent dir; bare aliases will pass through"
+            )
+            return {}
+
+        try:
+            with alias_file.open("r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+        except Exception as exc:
+            lib_logger.warning(
+                f"Failed to load weighted alias config from {alias_file}: {exc}"
+            )
+            return {}
+
+        aliases = config.get("aliases", {})
+        alias_map: Dict[str, List[Tuple[str, str, float]]] = {}
+        for alias, alias_config in aliases.items():
+            weights = (
+                alias_config.get("weights", {})
+                if isinstance(alias_config, dict)
+                else {}
+            )
+            entries: List[Tuple[str, str, float]] = []
+            for provider_model, weight in weights.items():
+                if not isinstance(provider_model, str):
+                    continue
+                provider = provider_model.split("/", 1)[0]
+                if not isinstance(weight, (int, float)) or weight <= 0:
+                    continue
+                entries.append((provider, provider_model, float(weight)))
+            if entries:
+                alias_map[alias] = entries
+
+        if alias_map:
+            lib_logger.info(
+                f"Loaded {len(alias_map)} weighted aliases from {alias_file.name}"
+            )
+
+        return alias_map
 
     def aembedding(
         self,

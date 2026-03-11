@@ -109,9 +109,9 @@ antigravity/gemini-3-pro-preview ← Antigravity (Gemini 3, Claude Opus 4.5)
 
 ### Weighted-Router Aliases (NEW)
 
-**Simplify your model names with stable aliases that auto-select providers:**
+**In the full opencode-router stack, simplify model names with stable aliases that auto-select providers:**
 
-Instead of specifying provider-specific models, use simple aliases and let the router automatically distribute load across available providers:
+Instead of specifying provider-specific models, use simple aliases at the weighted-router entrypoint and let the router automatically distribute load across available providers:
 
 ```bash
 # Before: Manually specify provider
@@ -121,7 +121,7 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
   -d '{"model": "ollama_cloud/glm-5", "messages": [{"role": "user", "content": "Hello"}]}'
 
 # After: Use stable alias with automatic provider selection
-curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+curl -X POST http://127.0.0.1:8001/v1/chat/completions \
   -H "Authorization: Bearer $PROXY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model": "glm-5", "messages": [{"role": "user", "content": "Hello"}]}'
@@ -131,11 +131,12 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 
 | Alias | Available Providers | Weights |
 |-------|---------------------|---------|
-| `glm-5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
-| `kimi-k2.5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
+| `glm-5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
+| `kimi-k2.5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
 | `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
-| `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 70%, 15%, 15% |
-| `qwen3.5` | ollama_cloud, chutes | 70%, 15% |
+| `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
+| `qwen3.5-cloud` | chutes | 100% |
+| `grok-4.1-fast` | openrouter_free | 100% |
 | `deepseek` | ollama_cloud, chutes | 90%, 10% |
 
 **Benefits:**
@@ -144,7 +145,9 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 - **High availability**: If one provider is down, others are automatically selected
 - **Simplified configuration**: No need to memorize provider-specific model IDs
 
-The router selects providers based on weighted random selection, preferring providers with higher weights. Only providers with available credentials are considered.
+The weighted router selects providers based on weighted random selection, preferring providers with higher weights. Only providers with available credentials are considered.
+
+`qwen3.5` is treated as a direct provider model, not a weighted bare alias. Use `qwen3.5-cloud` for the weighted alias. Raw Mirrowel requests on `:8000` should continue using provider-prefixed model names.
 
 ### Usage Examples
 

@@ -73,6 +73,13 @@ else:
 # Load main .env first
 load_dotenv(_root_dir / ".env")
 
+# Also load a parent repo .env when Mirrowel is embedded inside a larger workspace.
+# This keeps provider credentials and custom *_API_BASE variables available when
+# the proxy is launched from the nested mirrowel/ directory.
+_parent_env = _root_dir.parent / ".env"
+if _parent_env.exists() and _parent_env != (_root_dir / ".env"):
+    load_dotenv(_parent_env, override=False)
+
 # Load any additional .env files (e.g., antigravity_all_combined.env, gemini_cli_all_combined.env)
 _env_files_found = list(_root_dir.glob("*.env"))
 for _env_file in sorted(_root_dir.glob("*.env")):
