@@ -29,7 +29,7 @@ DIRECT_MODEL_TOKEN_FLOORS = {
     "kimi-k2.5": 128,
     "minimax-m2.5": 128,
     "deepseek": 128,
-    "qwen3.5": 256,
+    "qwen3.5": 512,
     "qwen3.5-cloud": 512,
 }
 

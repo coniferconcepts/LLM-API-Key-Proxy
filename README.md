@@ -135,6 +135,7 @@ curl -X POST http://127.0.0.1:8001/v1/chat/completions \
 | `kimi-k2.5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
 | `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
 | `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
+| `qwen3.5` | ollama_cloud, chutes | 80%, 20% |
 | `qwen3.5-cloud` | ollama_cloud, chutes | 80%, 20% |
 | `grok-4.1-fast` | openrouter_free | 100% |
 | `deepseek` | ollama_cloud, chutes | 80%, 20% |
@@ -147,7 +148,7 @@ curl -X POST http://127.0.0.1:8001/v1/chat/completions \
 
 The weighted router selects providers based on weighted random selection, preferring providers with higher weights. Only providers with available credentials are considered.
 
-`qwen3.5` is treated as a provider-prefixed direct model, not a weighted bare alias. Use `qwen3.5-cloud` for the weighted alias. Raw Mirrowel requests on `:8000` should continue using provider-prefixed model names.
+`qwen3.5` is the canonical weighted alias for the full stack. `qwen3.5-cloud` remains available as a backward-compatible alias. Raw Mirrowel requests on `:8000` should still prefer provider-prefixed model names when bypassing weighted routing.
 
 ### Usage Examples
 
