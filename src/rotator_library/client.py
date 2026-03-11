@@ -30,7 +30,6 @@ DIRECT_MODEL_TOKEN_FLOORS = {
     "minimax-m2.5": 128,
     "deepseek": 128,
     "qwen3.5": 512,
-    "qwen3.5-cloud": 512,
 }
 
 from .usage_manager import UsageManager
@@ -2927,7 +2926,7 @@ class RotatingClient:
         model_lower = model.lower()
 
         if "qwen3.5:397b" in model_lower or "qwen3.5-397b-a17b-tee" in model_lower:
-            return "qwen3.5-cloud"
+            return "qwen3.5"
         if "glm-5" in model_lower:
             return "glm-5"
         if "kimi-k2.5" in model_lower:
