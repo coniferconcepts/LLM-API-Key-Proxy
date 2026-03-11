@@ -2074,8 +2074,8 @@ See Section 2.1 "Weighted-Router Alias Resolution" for full technical details.
 | `kimi-k2.5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
 | `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
 | `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
-| `qwen3.5-cloud` | chutes | 100% |
+| `qwen3.5-cloud` | ollama_cloud, chutes | 80%, 20% |
 | `grok-4.1-fast` | openrouter_free | 100% |
-| `deepseek` | ollama_cloud, chutes | 90%, 10% |
+| `deepseek` | ollama_cloud, chutes | 80%, 20% |
 
-**Note:** OpenCode GO only supports glm-5, kimi-k2.5, and minimax-m2.5. Other aliases exclude opencode_go from their provider list. `qwen3.5` remains available only as a direct provider model; use `qwen3.5-cloud` as the weighted alias. Raw Mirrowel requests should continue using provider-prefixed model names, while bare aliases are intended for the weighted-router stack entrypoint.
+**Note:** OpenCode GO only supports glm-5, kimi-k2.5, and minimax-m2.5. Other aliases exclude opencode_go from their provider list. `qwen3.5` remains available only as a provider-prefixed direct model; use `qwen3.5-cloud` as the weighted alias. Raw Mirrowel requests should continue using provider-prefixed model names, while bare aliases are intended for the weighted-router stack entrypoint.

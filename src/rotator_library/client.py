@@ -28,6 +28,7 @@ DIRECT_MODEL_TOKEN_FLOORS = {
     "glm-5": 256,
     "kimi-k2.5": 128,
     "minimax-m2.5": 128,
+    "deepseek": 128,
     "qwen3.5": 256,
     "qwen3.5-cloud": 512,
 }
@@ -2925,7 +2926,7 @@ class RotatingClient:
     def _get_token_floor_model_key(self, model: str) -> Optional[str]:
         model_lower = model.lower()
 
-        if "qwen3.5:cloud" in model_lower or "qwen3.5-397b-a17b-tee" in model_lower:
+        if "qwen3.5:397b" in model_lower or "qwen3.5-397b-a17b-tee" in model_lower:
             return "qwen3.5-cloud"
         if "glm-5" in model_lower:
             return "glm-5"
@@ -2933,6 +2934,8 @@ class RotatingClient:
             return "kimi-k2.5"
         if "minimax-m2.5" in model_lower:
             return "minimax-m2.5"
+        if "deepseek-v3.2" in model_lower or "deepseek" in model_lower:
+            return "deepseek"
         if "qwen3.5" in model_lower:
             return "qwen3.5"
 
