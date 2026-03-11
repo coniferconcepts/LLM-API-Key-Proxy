@@ -136,6 +136,7 @@ curl -X POST http://127.0.0.1:8001/v1/chat/completions \
 | `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
 | `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
 | `qwen3.5` | ollama_cloud, chutes | 80%, 20% |
+| `nemotron-3-super` | ollama_cloud | 100% |
 | `grok-4.1-fast` | openrouter_free | 100% |
 | `deepseek` | ollama_cloud, chutes | 80%, 20% |
 
@@ -148,6 +149,8 @@ curl -X POST http://127.0.0.1:8001/v1/chat/completions \
 The weighted router selects providers based on weighted random selection, preferring providers with higher weights. Only providers with available credentials are considered.
 
 `qwen3.5` is the canonical weighted alias for the full stack. `qwen3.5-cloud` has been removed. Raw Mirrowel requests on `:8000` should still prefer provider-prefixed model names when bypassing weighted routing.
+
+`nemotron-3-super` is currently routed only to Ollama Cloud. Even though the upstream model advertises 1M context, the effective limit in this stack appears to be 256K.
 
 ### Usage Examples
 

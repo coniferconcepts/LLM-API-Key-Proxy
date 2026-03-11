@@ -2075,7 +2075,10 @@ See Section 2.1 "Weighted-Router Alias Resolution" for full technical details.
 | `qwen3-coder-next` | ollama_cloud, chutes | 70%, 15% |
 | `minimax-m2.5` | ollama_cloud, opencode_go, chutes | 80%, 10%, 10% |
 | `qwen3.5` | ollama_cloud, chutes | 80%, 20% |
+| `nemotron-3-super` | ollama_cloud | 100% |
 | `grok-4.1-fast` | openrouter_free | 100% |
 | `deepseek` | ollama_cloud, chutes | 80%, 20% |
 
 **Note:** OpenCode GO only supports glm-5, kimi-k2.5, and minimax-m2.5. Other aliases exclude opencode_go from their provider list. `qwen3.5` is the canonical weighted alias. Raw Mirrowel requests should continue using provider-prefixed model names when bypassing the weighted-router entrypoint.
+
+`nemotron-3-super` is currently Ollama Cloud only. Use a 256K effective context assumption for this route until Ollama Cloud exposes the full 1M context window.
