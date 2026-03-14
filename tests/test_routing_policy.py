@@ -119,6 +119,16 @@ def test_provider_model_mismatch_fails_validation_when_models_are_known():
         )
 
 
+def test_provider_in_available_providers_remains_known_when_plugins_differ():
+    policy = RoutingPolicy(
+        model_overrides={},
+        available_providers={"ollama", "chutes"},
+        known_providers={"opencode_go"},
+    )
+
+    assert policy.known_providers == {"ollama", "chutes", "opencode_go"}
+
+
 def test_weighted_override_rewrites_qwen3_5_to_allowed_provider():
     policy = RoutingPolicy(
         model_overrides={
