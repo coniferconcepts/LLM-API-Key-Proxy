@@ -45,7 +45,9 @@ class RoutingPolicy:
 
         self.model_overrides = model_overrides
         self.available_providers = set(available_providers)
-        self.known_providers = set(known_providers or self.available_providers)
+        # A provider is valid for config validation if it has credentials,
+        # a loaded plugin, or both.
+        self.known_providers = self.available_providers | set(known_providers or ())
         self.provider_models = provider_models or {}
         self.rng = rng or random.Random()
         self._validate()
