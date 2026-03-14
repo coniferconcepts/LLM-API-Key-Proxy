@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import random
 
 import pytest
 
@@ -115,4 +116,146 @@ def test_provider_model_mismatch_fails_validation_when_models_are_known():
                     "fallback_providers": [],
                 }
             }
+        )
+
+
+def test_weighted_override_rewrites_qwen3_5_to_allowed_provider():
+    policy = RoutingPolicy(
+        model_overrides={
+            "qwen3.5": {
+                "strategy": "weighted",
+                "allowed_providers": ["ollama", "chutes"],
+                "weights": {"ollama": 80, "chutes": 20},
+                "excluded_providers": ["go"],
+                "fallback_providers": [],
+                "strict": True,
+                "allow_global_fallback": False,
+                "reason": "Exclude go for qwen3.5",
+            }
+        },
+        available_providers={"ollama", "chutes", "go"},
+        provider_models={
+            "ollama": {"qwen3.5"},
+            "chutes": {"qwen3.5"},
+            "go": set(),
+        },
+        rng=random.Random(1),
+    )
+
+    decision = policy.resolve("weighted-router/qwen3.5")
+
+    assert decision.selected_provider in {"ollama", "chutes"}
+    assert decision.selected_provider != "go"
+    assert decision.rewritten_model == f"{decision.selected_provider}/qwen3.5"
+    assert decision.strategy == "weighted"
+    assert decision.candidate_providers == ["ollama", "chutes"]
+    assert decision.excluded_providers == ["go"]
+
+
+def test_weighted_override_with_zero_roll_selects_first_provider():
+    policy = RoutingPolicy(
+        model_overrides={
+            "qwen3.5": {
+                "strategy": "weighted",
+                "allowed_providers": ["ollama", "chutes"],
+                "weights": {"ollama": 80, "chutes": 20},
+                "excluded_providers": ["go"],
+                "fallback_providers": [],
+            }
+        },
+        available_providers={"ollama", "chutes", "go"},
+        provider_models={"ollama": {"qwen3.5"}, "chutes": {"qwen3.5"}, "go": set()},
+        rng=random.Random(0),
+    )
+    policy.rng.uniform = lambda start, end: 0.0
+
+    decision = policy.resolve("weighted-router/qwen3.5")
+
+    assert decision.selected_provider == "ollama"
+
+
+@pytest.mark.parametrize(
+    "override, expected_error",
+    [
+        (
+            {
+                "qwen3.5": {
+                    "strategy": "weighted",
+                    "allowed_providers": ["ollama", "chutes"],
+                    "weights": {"ollama": 80, "chutes": 20},
+                    "excluded_providers": ["chutes"],
+                    "fallback_providers": [],
+                }
+            },
+            "both 'allowed_providers' and 'excluded_providers'",
+        ),
+        (
+            {
+                "qwen3.5": {
+                    "strategy": "weighted",
+                    "allowed_providers": ["ollama", "chutes"],
+                    "weights": {"ollama": 80},
+                    "excluded_providers": ["go"],
+                    "fallback_providers": [],
+                }
+            },
+            "matching providers in 'weights' and 'allowed_providers'",
+        ),
+        (
+            {
+                "qwen3.5": {
+                    "strategy": "weighted",
+                    "allowed_providers": ["ollama", "chutes"],
+                    "weights": {"ollama": 80, "chutes": -20},
+                    "excluded_providers": ["go"],
+                    "fallback_providers": [],
+                }
+            },
+            "negative weights",
+        ),
+        (
+            {
+                "qwen3.5": {
+                    "strategy": "weighted",
+                    "allowed_providers": ["ollama", "chutes"],
+                    "weights": {"ollama": 0, "chutes": 0},
+                    "excluded_providers": ["go"],
+                    "fallback_providers": [],
+                }
+            },
+            "total greater than zero",
+        ),
+        (
+            {
+                "qwen3.5": {
+                    "strategy": "weighted",
+                    "allowed_providers": ["ollama", "chutes"],
+                    "weights": {"ollama": 80, "chutes": 20},
+                    "excluded_providers": ["go"],
+                    "fallback_providers": [],
+                    "allow_global_fallback": True,
+                }
+            },
+            "cannot enable 'allow_global_fallback'",
+        ),
+        (
+            {
+                "qwen3.5": {
+                    "strategy": "weighted",
+                    "allowed_providers": ["ollama", "chutes"],
+                    "weights": {"ollama": 80, "chutes": 20},
+                    "excluded_providers": ["go"],
+                    "fallback_providers": ["go"],
+                }
+            },
+            "cannot define 'fallback_providers' in v2",
+        ),
+    ],
+)
+def test_invalid_weighted_override_shapes_fail_validation(override, expected_error):
+    with pytest.raises(RoutingPolicyError, match=expected_error):
+        RoutingPolicy(
+            model_overrides=override,
+            available_providers={"ollama", "chutes", "go"},
+            provider_models={"ollama": {"qwen3.5"}, "chutes": {"qwen3.5"}, "go": set()},
         )

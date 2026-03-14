@@ -919,7 +919,7 @@ class RotatingClient:
             return
 
         lib_logger.info(
-            "Route decision: requested_model=%s rewritten_model=%s selected_provider=%s strategy=%s selection_source=%s strict=%s allow_global_fallback=%s candidate_providers=%s reason=%s",
+            "Route decision: requested_model=%s rewritten_model=%s selected_provider=%s strategy=%s selection_source=%s strict=%s allow_global_fallback=%s candidate_providers=%s excluded_providers=%s reason=%s",
             decision.requested_model,
             decision.rewritten_model,
             decision.selected_provider,
@@ -928,6 +928,7 @@ class RotatingClient:
             decision.strict,
             decision.allow_global_fallback,
             decision.candidate_providers,
+            decision.excluded_providers,
             decision.reason,
         )
 

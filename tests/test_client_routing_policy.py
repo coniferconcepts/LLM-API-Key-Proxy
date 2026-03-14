@@ -1,5 +1,6 @@
 import sys
 import asyncio
+import random
 from pathlib import Path
 
 import pytest
@@ -96,3 +97,30 @@ def test_acompletion_rewrites_model_before_dispatch(monkeypatch):
 
     assert result == {"ok": True}
     assert captured["model"] == "ollama/nemotron-3-super"
+
+
+def test_client_helper_rewrites_weighted_qwen3_5_model():
+    client = RotatingClient.__new__(RotatingClient)
+    client.routing_policy = RoutingPolicy(
+        model_overrides={
+            "qwen3.5": {
+                "strategy": "weighted",
+                "allowed_providers": ["ollama", "chutes"],
+                "weights": {"ollama": 80, "chutes": 20},
+                "excluded_providers": ["go"],
+                "fallback_providers": [],
+                "strict": True,
+                "allow_global_fallback": False,
+            }
+        },
+        available_providers={"ollama", "chutes", "go"},
+        provider_models={"ollama": {"qwen3.5"}, "chutes": {"qwen3.5"}, "go": set()},
+        rng=random.Random(1),
+    )
+
+    model, decision = client._apply_routing_policy("weighted-router/qwen3.5")
+
+    assert model in {"ollama/qwen3.5", "chutes/qwen3.5"}
+    assert decision is not None
+    assert decision.strategy == "weighted"
+    assert decision.excluded_providers == ["go"]
