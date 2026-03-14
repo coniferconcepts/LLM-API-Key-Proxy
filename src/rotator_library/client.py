@@ -900,6 +900,7 @@ class RotatingClient:
             model_overrides=self.model_routing_overrides,
             available_providers=self.all_credentials.keys(),
             provider_models=provider_models,
+            known_providers=self._provider_plugins.keys(),
         )
         lib_logger.info(
             "Loaded %d model routing override(s)",

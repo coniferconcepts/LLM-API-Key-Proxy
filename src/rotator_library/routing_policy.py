@@ -37,6 +37,7 @@ class RoutingPolicy:
         model_overrides: Dict[str, Any],
         available_providers: Iterable[str],
         provider_models: Optional[Dict[str, Set[str]]] = None,
+        known_providers: Optional[Iterable[str]] = None,
         rng: Optional[random.Random] = None,
     ) -> None:
         if not isinstance(model_overrides, dict):
@@ -44,6 +45,7 @@ class RoutingPolicy:
 
         self.model_overrides = model_overrides
         self.available_providers = set(available_providers)
+        self.known_providers = set(known_providers or self.available_providers)
         self.provider_models = provider_models or {}
         self.rng = rng or random.Random()
         self._validate()
@@ -56,7 +58,7 @@ class RoutingPolicy:
             )
 
     def _validate_provider_name(self, provider: str, clean_model: str, field_name: str) -> None:
-        if provider not in self.available_providers:
+        if provider not in self.known_providers:
             raise RoutingPolicyError(
                 f"routing override for '{clean_model}' references unknown provider '{provider}' in '{field_name}'"
             )

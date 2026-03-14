@@ -107,14 +107,15 @@ def test_client_helper_rewrites_weighted_qwen3_5_model():
                 "strategy": "weighted",
                 "allowed_providers": ["ollama", "chutes"],
                 "weights": {"ollama": 80, "chutes": 20},
-                "excluded_providers": ["go"],
+                "excluded_providers": ["opencode_go"],
                 "fallback_providers": [],
                 "strict": True,
                 "allow_global_fallback": False,
             }
         },
-        available_providers={"ollama", "chutes", "go"},
-        provider_models={"ollama": {"qwen3.5"}, "chutes": {"qwen3.5"}, "go": set()},
+        available_providers={"ollama", "chutes"},
+        provider_models={"ollama": {"qwen3.5"}, "chutes": {"qwen3.5"}},
+        known_providers={"ollama", "chutes", "opencode_go"},
         rng=random.Random(1),
     )
 
@@ -123,4 +124,4 @@ def test_client_helper_rewrites_weighted_qwen3_5_model():
     assert model in {"ollama/qwen3.5", "chutes/qwen3.5"}
     assert decision is not None
     assert decision.strategy == "weighted"
-    assert decision.excluded_providers == ["go"]
+    assert decision.excluded_providers == ["opencode_go"]

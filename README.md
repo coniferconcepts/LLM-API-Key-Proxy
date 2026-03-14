@@ -523,16 +523,16 @@ export MODEL_ROUTING_OVERRIDES='{
     "strategy": "weighted",
     "allowed_providers": ["ollama", "chutes"],
     "weights": {"ollama": 80, "chutes": 20},
-    "excluded_providers": ["go"],
+    "excluded_providers": ["opencode_go"],
     "fallback_providers": [],
     "strict": true,
     "allow_global_fallback": false,
-    "reason": "Keep qwen3.5 off go"
+    "reason": "Keep qwen3.5 off opencode_go"
   }
 }'
 ```
 
-That configuration selects either `ollama/qwen3.5` or `chutes/qwen3.5` and never falls through to `go/qwen3.5`.
+That configuration selects either `ollama/qwen3.5` or `chutes/qwen3.5` and never falls through to `opencode_go/qwen3.5`.
 
 </details>
 
