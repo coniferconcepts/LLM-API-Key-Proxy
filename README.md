@@ -493,11 +493,11 @@ The proxy includes a powerful text-based UI for configuration and management.
 </details>
 
 <details>
-<summary><b>Weighted Router Per-Model Overrides (v1)</b></summary>
+<summary><b>Weighted Router Per-Model Overrides</b></summary>
 
-Use `MODEL_ROUTING_OVERRIDES` to pin a `weighted-router/<model>` alias to a single provider before credential selection begins. v1 supports only the `single` strategy and fails closed if a matching override is missing or invalid.
+Use `MODEL_ROUTING_OVERRIDES` to rewrite a `weighted-router/<model>` alias before credential selection begins. Supported strategies are `single` and `weighted`, and unmatched `weighted-router/*` models fail closed.
 
-In v1, `allowed_providers` must contain only the primary provider and `fallback_providers` must stay empty.
+For `single`, `allowed_providers` must contain only the primary provider and `fallback_providers` must stay empty.
 
 ```bash
 export MODEL_ROUTING_OVERRIDES='{
@@ -514,6 +514,25 @@ export MODEL_ROUTING_OVERRIDES='{
 ```
 
 With that configuration, a request for `weighted-router/nemotron-3-super` is rewritten to `ollama/nemotron-3-super` before the normal retry and credential rotation flow runs.
+
+Weighted overrides can keep a model on an explicit allowlist while excluding a provider entirely:
+
+```bash
+export MODEL_ROUTING_OVERRIDES='{
+  "qwen3.5": {
+    "strategy": "weighted",
+    "allowed_providers": ["ollama", "chutes"],
+    "weights": {"ollama": 80, "chutes": 20},
+    "excluded_providers": ["opencode_go"],
+    "fallback_providers": [],
+    "strict": true,
+    "allow_global_fallback": false,
+    "reason": "Keep qwen3.5 off opencode_go"
+  }
+}'
+```
+
+That configuration selects either `ollama/qwen3.5` or `chutes/qwen3.5` and never falls through to `opencode_go/qwen3.5`.
 
 </details>
 

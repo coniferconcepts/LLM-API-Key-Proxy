@@ -80,11 +80,11 @@ The logic applies in the following order:
 2.  **Blacklist Check**: For any model *not* on the whitelist, the client checks the blacklist (`IGNORE_MODELS_<PROVIDER>`). If the model matches a blacklist pattern (supports wildcards like `*-preview`), it is excluded.
 3.  **Default**: If a model is on neither list, it is included.
 
-#### Per-Model Routing Overrides (v1)
+#### Per-Model Routing Overrides
 
-`MODEL_ROUTING_OVERRIDES` lets operators rewrite `weighted-router/<model>` aliases into a concrete provider-prefixed model before provider lock-in. v1 supports only strict `single` routes so retry, cooldown, and credential rotation continue to run inside one provider lane.
+`MODEL_ROUTING_OVERRIDES` lets operators rewrite `weighted-router/<model>` aliases into a concrete provider-prefixed model before provider lock-in. Supported strategies are `single` and `weighted`, so retry, cooldown, and credential rotation continue to run inside the chosen provider lane.
 
-In v1, `allowed_providers` must contain only the primary provider and `fallback_providers` must remain empty.
+For `single`, `allowed_providers` must contain only the primary provider and `fallback_providers` must remain empty.
 
 Example:
 
@@ -103,6 +103,25 @@ MODEL_ROUTING_OVERRIDES='{
 ```
 
 This rewrites `weighted-router/nemotron-3-super` to `ollama/nemotron-3-super`. Invalid override config fails at startup, and unmatched `weighted-router/*` models fail closed instead of silently falling back to another provider.
+
+Weighted overrides let a model stay on a strict allowlist while excluding a provider entirely:
+
+```bash
+MODEL_ROUTING_OVERRIDES='{
+  "qwen3.5": {
+    "strategy": "weighted",
+    "allowed_providers": ["ollama", "chutes"],
+    "weights": {"ollama": 80, "chutes": 20},
+    "excluded_providers": ["opencode_go"],
+    "fallback_providers": [],
+    "strict": true,
+    "allow_global_fallback": false,
+    "reason": "Keep qwen3.5 off opencode_go"
+  }
+}'
+```
+
+This selects only `ollama/qwen3.5` or `chutes/qwen3.5`. Invalid weights, unknown providers, excluded/allowed overlaps, and any attempt to enable global fallback fail at startup.
 
 #### Request Lifecycle: A Deadline-Driven Approach
 
