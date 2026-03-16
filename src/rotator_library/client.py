@@ -884,7 +884,45 @@ class RotatingClient:
                 "MODEL_ROUTING_OVERRIDES must decode to an object keyed by clean model name"
             )
 
-        return overrides
+        provider_aliases = {
+            "ollama": "ollama_cloud",
+            "openrouter_free": "openrouter_non_zdr",
+        }
+
+        def normalize_provider(provider: Any) -> Any:
+            if not isinstance(provider, str):
+                return provider
+            return provider_aliases.get(provider, provider)
+
+        normalized: Dict[str, Any] = {}
+        for clean_model, override in overrides.items():
+            if not isinstance(override, dict):
+                normalized[clean_model] = override
+                continue
+
+            override_copy = dict(override)
+            if "primary" in override_copy:
+                override_copy["primary"] = normalize_provider(override_copy["primary"])
+            if isinstance(override_copy.get("allowed_providers"), list):
+                override_copy["allowed_providers"] = [
+                    normalize_provider(provider) for provider in override_copy["allowed_providers"]
+                ]
+            if isinstance(override_copy.get("excluded_providers"), list):
+                override_copy["excluded_providers"] = [
+                    normalize_provider(provider) for provider in override_copy["excluded_providers"]
+                ]
+            if isinstance(override_copy.get("fallback_providers"), list):
+                override_copy["fallback_providers"] = [
+                    normalize_provider(provider) for provider in override_copy["fallback_providers"]
+                ]
+            if isinstance(override_copy.get("weights"), dict):
+                override_copy["weights"] = {
+                    normalize_provider(provider): weight
+                    for provider, weight in override_copy["weights"].items()
+                }
+            normalized[clean_model] = override_copy
+
+        return normalized
 
     def _build_routing_policy(self) -> Optional[RoutingPolicy]:
         if not self.model_routing_overrides:

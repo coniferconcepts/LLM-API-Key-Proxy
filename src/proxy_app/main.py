@@ -14,9 +14,7 @@ import logging
 
 # --- Argument Parsing (BEFORE heavy imports) ---
 parser = argparse.ArgumentParser(description="API Key Proxy Server")
-parser.add_argument(
-    "--host", type=str, default="0.0.0.0", help="Host to bind the server to."
-)
+parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind the server to.")
 parser.add_argument("--port", type=int, default=8000, help="Port to run the server on.")
 parser.add_argument(
     "--enable-request-logging",
@@ -70,6 +68,63 @@ if getattr(sys, "frozen", False):
 else:
     _root_dir = Path.cwd()
 
+
+def _set_env_default(target: str, *sources: str, default: str | None = None) -> None:
+    if os.getenv(target):
+        return
+    for source in sources:
+        value = os.getenv(source)
+        if value:
+            os.environ[target] = value
+            return
+    if default is not None:
+        os.environ[target] = default
+
+
+def _normalize_provider_env_aliases() -> None:
+    _set_env_default("PROXY_API_KEY", "MIRROWEL_PROXY_KEY")
+    _set_env_default("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY")
+    _set_env_default("OPENCODE_GO_API_KEY", "OPENCODE_GO_KEY")
+    _set_env_default("OPENROUTER_ZDR_API_KEY", "OPENROUTER_ZDR_KEY")
+    _set_env_default(
+        "OPENROUTER_FREE_API_KEY",
+        "OPENROUTER_FREE_KEY",
+        "OPENROUTER_NON_ZDR_API_KEY",
+        "OPENROUTER_NON_ZDR_KEY",
+    )
+    _set_env_default(
+        "OPENROUTER_NON_ZDR_API_KEY",
+        "OPENROUTER_NON_ZDR_KEY",
+        "OPENROUTER_FREE_API_KEY",
+        "OPENROUTER_FREE_KEY",
+    )
+    _set_env_default(
+        "OPENROUTER_FREE_KEY",
+        "OPENROUTER_NON_ZDR_KEY",
+        "OPENROUTER_NON_ZDR_API_KEY",
+        "OPENROUTER_FREE_API_KEY",
+    )
+    _set_env_default(
+        "OPENROUTER_NON_ZDR_KEY",
+        "OPENROUTER_FREE_KEY",
+        "OPENROUTER_FREE_API_KEY",
+        "OPENROUTER_NON_ZDR_API_KEY",
+    )
+    _set_env_default("OLLAMA_CLOUD_API_BASE", "OLLAMA_API_BASE", default="https://ollama.com/v1")
+    _set_env_default("OPENCODE_GO_API_BASE", default="https://opencode.ai/zen/go/v1")
+    _set_env_default("OPENROUTER_ZDR_API_BASE", default="https://openrouter.ai/api/v1")
+    _set_env_default(
+        "OPENROUTER_NON_ZDR_API_BASE",
+        "OPENROUTER_FREE_API_BASE",
+        default="https://openrouter.ai/api/v1",
+    )
+    _set_env_default(
+        "OPENROUTER_FREE_API_BASE",
+        "OPENROUTER_NON_ZDR_API_BASE",
+        default="https://openrouter.ai/api/v1",
+    )
+
+
 # Load main .env first
 load_dotenv(_root_dir / ".env")
 
@@ -78,6 +133,8 @@ _env_files_found = list(_root_dir.glob("*.env"))
 for _env_file in sorted(_root_dir.glob("*.env")):
     if _env_file.name != ".env":  # Skip main .env (already loaded)
         load_dotenv(_env_file, override=False)  # Don't override existing values
+
+_normalize_provider_env_aliases()
 
 # Log discovered .env files for deployment verification
 if _env_files_found:
@@ -295,9 +352,7 @@ debug_file_handler.setFormatter(
 # Create a filter to ensure the debug handler ONLY gets DEBUG messages from the rotator_library
 class RotatorDebugFilter(logging.Filter):
     def filter(self, record):
-        return record.levelno == logging.DEBUG and record.name.startswith(
-            "rotator_library"
-        )
+        return record.levelno == logging.DEBUG and record.name.startswith("rotator_library")
 
 
 debug_file_handler.addFilter(RotatorDebugFilter())
@@ -356,9 +411,7 @@ USE_EMBEDDING_BATCHER = False
 ENABLE_REQUEST_LOGGING = args.enable_request_logging
 ENABLE_RAW_LOGGING = args.enable_raw_logging
 if ENABLE_REQUEST_LOGGING:
-    logging.info(
-        "Transaction logging is enabled (library-level with provider correlation)."
-    )
+    logging.info("Transaction logging is enabled (library-level with provider correlation).")
 if ENABLE_RAW_LOGGING:
     logging.info("Raw I/O logging is enabled (proxy boundary, unmodified HTTP data).")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
@@ -378,26 +431,18 @@ ignore_models = {}
 for key, value in os.environ.items():
     if key.startswith("IGNORE_MODELS_"):
         provider = key.replace("IGNORE_MODELS_", "").lower()
-        models_to_ignore = [
-            model.strip() for model in value.split(",") if model.strip()
-        ]
+        models_to_ignore = [model.strip() for model in value.split(",") if model.strip()]
         ignore_models[provider] = models_to_ignore
-        logging.debug(
-            f"Loaded ignore list for provider '{provider}': {models_to_ignore}"
-        )
+        logging.debug(f"Loaded ignore list for provider '{provider}': {models_to_ignore}")
 
 # Load model whitelist from environment variables
 whitelist_models = {}
 for key, value in os.environ.items():
     if key.startswith("WHITELIST_MODELS_"):
         provider = key.replace("WHITELIST_MODELS_", "").lower()
-        models_to_whitelist = [
-            model.strip() for model in value.split(",") if model.strip()
-        ]
+        models_to_whitelist = [model.strip() for model in value.split(",") if model.strip()]
         whitelist_models[provider] = models_to_whitelist
-        logging.debug(
-            f"Loaded whitelist for provider '{provider}': {models_to_whitelist}"
-        )
+        logging.debug(f"Loaded whitelist for provider '{provider}': {models_to_whitelist}")
 
 # Load max concurrent requests per key from environment variables
 max_concurrent_requests_per_key = {}
@@ -492,9 +537,7 @@ async def lifespan(app: FastAPI):
                 return (provider, path, email, None)
 
             except Exception as e:
-                logging.error(
-                    f"Failed to process OAuth token for {provider} at '{path}': {e}"
-                )
+                logging.error(f"Failed to process OAuth token for {provider} at '{path}': {e}")
                 return (provider, path, None, e)
 
         # Collect all tasks for parallel execution
@@ -537,9 +580,7 @@ async def lifespan(app: FastAPI):
 
             # Handle empty email
             if not email:
-                logging.warning(
-                    f"Could not retrieve email for '{path}'. Treating as unique."
-                )
+                logging.warning(f"Could not retrieve email for '{path}'. Treating as unique.")
                 if provider not in final_oauth_credentials:
                     final_oauth_credentials[provider] = []
                 final_oauth_credentials[provider].append(path)
@@ -549,10 +590,7 @@ async def lifespan(app: FastAPI):
             if email not in processed_emails:
                 processed_emails[email] = {}
 
-            if (
-                provider in processed_emails[email]
-                and processed_emails[email][provider] != path
-            ):
+            if provider in processed_emails[email] and processed_emails[email][provider] != path:
                 original_path = processed_emails[email][provider]
                 logging.warning(
                     f"Duplicate for '{email}' on '{provider}' found post-init: '{Path(path).name}'. Original: '{Path(original_path).name}'. Skipping."
@@ -583,9 +621,7 @@ async def lifespan(app: FastAPI):
         oauth_credentials = final_oauth_credentials
 
     # [NEW] Load provider-specific params
-    litellm_provider_params = {
-        "gemini_cli": {"project_id": os.getenv("GEMINI_CLI_PROJECT_ID")}
-    }
+    litellm_provider_params = {"gemini_cli": {"project_id": os.getenv("GEMINI_CLI_PROJECT_ID")}}
 
     # Load global timeout from environment (default 30 seconds)
     global_timeout = int(os.getenv("GLOBAL_TIMEOUT", "30"))
@@ -616,9 +652,7 @@ async def lifespan(app: FastAPI):
         logging.warning("=" * 70)
         logging.warning("⚠️  NO PROVIDER CREDENTIALS CONFIGURED")
         logging.warning("The proxy is running but cannot serve any LLM requests.")
-        logging.warning(
-            "Launch the credential tool to add API keys or OAuth credentials."
-        )
+        logging.warning("Launch the credential tool to add API keys or OAuth credentials.")
         logging.warning("  • Executable: Run with --add-credential flag")
         logging.warning("  • Source: python src/proxy_app/main.py --add-credential")
         logging.warning("=" * 70)
@@ -755,9 +789,7 @@ async def streaming_response_wrapper(
         yield "data: [DONE]\n\n"
         # Also log this as a failed request
         if logger:
-            logger.log_final_response(
-                status_code=500, headers=None, body={"error": str(e)}
-            )
+            logger.log_final_response(status_code=500, headers=None, body={"error": str(e)})
         return  # Stop further processing
     finally:
         if response_chunks:
@@ -802,14 +834,11 @@ async def streaming_response_wrapper(
                                 if "function" in tc_chunk:
                                     if "name" in tc_chunk["function"]:
                                         if tc_chunk["function"]["name"] is not None:
-                                            aggregated_tool_calls[index]["function"][
-                                                "name"
-                                            ] += tc_chunk["function"]["name"]
+                                            aggregated_tool_calls[index]["function"]["name"] += (
+                                                tc_chunk["function"]["name"]
+                                            )
                                     if "arguments" in tc_chunk["function"]:
-                                        if (
-                                            tc_chunk["function"]["arguments"]
-                                            is not None
-                                        ):
+                                        if tc_chunk["function"]["arguments"] is not None:
                                             aggregated_tool_calls[index]["function"][
                                                 "arguments"
                                             ] += tc_chunk["function"]["arguments"]
@@ -822,14 +851,12 @@ async def streaming_response_wrapper(
                                 }
                             if "name" in value:
                                 if value["name"] is not None:
-                                    final_message["function_call"]["name"] += value[
-                                        "name"
-                                    ]
+                                    final_message["function_call"]["name"] += value["name"]
                             if "arguments" in value:
                                 if value["arguments"] is not None:
-                                    final_message["function_call"]["arguments"] += (
-                                        value["arguments"]
-                                    )
+                                    final_message["function_call"]["arguments"] += value[
+                                        "arguments"
+                                    ]
 
                         else:  # Generic key handling for other data like 'reasoning'
                             # FIX: Role should always replace, never concatenate
@@ -958,9 +985,7 @@ async def chat_completions(
         if is_streaming:
             response_generator = client.acompletion(request=request, **request_data)
             return StreamingResponse(
-                streaming_response_wrapper(
-                    request, request_data, response_generator, raw_logger
-                ),
+                streaming_response_wrapper(request, request_data, response_generator, raw_logger),
                 media_type="text/event-stream",
             )
         else:
@@ -968,12 +993,8 @@ async def chat_completions(
             if raw_logger:
                 # Assuming response has status_code and headers attributes
                 # This might need adjustment based on the actual response object
-                response_headers = (
-                    response.headers if hasattr(response, "headers") else None
-                )
-                status_code = (
-                    response.status_code if hasattr(response, "status_code") else 200
-                )
+                response_headers = response.headers if hasattr(response, "headers") else None
+                status_code = response.status_code if hasattr(response, "status_code") else 200
                 raw_logger.log_final_response(
                     status_code=status_code,
                     headers=response_headers,
@@ -1006,9 +1027,7 @@ async def chat_completions(
             except json.JSONDecodeError:
                 request_data = {"error": "Could not parse request body"}
             if raw_logger:
-                raw_logger.log_final_response(
-                    status_code=500, headers=None, body={"error": str(e)}
-                )
+                raw_logger.log_final_response(status_code=500, headers=None, body={"error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1504,9 +1523,7 @@ async def token_count(
         messages = data.get("messages")
 
         if not model or not messages:
-            raise HTTPException(
-                status_code=400, detail="'model' and 'messages' are required."
-            )
+            raise HTTPException(status_code=400, detail="'model' and 'messages' are required.")
 
         count = client.token_count(**data)
         return {"token_count": count}
@@ -1640,9 +1657,7 @@ if __name__ == "__main__":
 
     def show_onboarding_message():
         """Display clear explanatory message for why onboarding is needed."""
-        os.system(
-            "cls" if os.name == "nt" else "clear"
-        )  # Clear terminal for clean presentation
+        os.system("cls" if os.name == "nt" else "clear")  # Clear terminal for clean presentation
         console.print(
             Panel.fit(
                 "[bold cyan]🚀 LLM API Key Proxy - First Time Setup[/bold cyan]",
@@ -1669,9 +1684,7 @@ if __name__ == "__main__":
         )
         console.print("   You can remove it later if you want an unsecured proxy.\n")
 
-        console.input(
-            "[bold green]Press Enter to launch the credential setup tool...[/bold green]"
-        )
+        console.input("[bold green]Press Enter to launch the credential setup tool...[/bold green]")
 
     # Check if user explicitly wants to add credentials
     if args.add_credential:
