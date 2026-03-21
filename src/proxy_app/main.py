@@ -426,6 +426,16 @@ for key, value in os.environ.items():
             api_keys[provider] = []
         api_keys[provider].append(value)
 
+disabled_providers = {
+    provider.strip().lower()
+    for provider in os.getenv("DISABLED_PROVIDERS", "").split(",")
+    if provider.strip()
+}
+if disabled_providers:
+    api_keys = {
+        provider: keys for provider, keys in api_keys.items() if provider not in disabled_providers
+    }
+
 # Load model ignore lists from environment variables
 ignore_models = {}
 for key, value in os.environ.items():
@@ -475,7 +485,7 @@ async def lifespan(app: FastAPI):
 
     # The CredentialManager now handles all discovery, including .env overrides.
     # We pass all environment variables to it for this purpose.
-    cred_manager = CredentialManager(os.environ)
+    cred_manager = CredentialManager(dict(os.environ))
     oauth_credentials = cred_manager.discover_and_prepare()
 
     if not skip_oauth_init and oauth_credentials:
@@ -619,6 +629,13 @@ async def lifespan(app: FastAPI):
 
         logging.info("OAuth credential processing complete.")
         oauth_credentials = final_oauth_credentials
+
+    if disabled_providers:
+        oauth_credentials = {
+            provider: paths
+            for provider, paths in oauth_credentials.items()
+            if provider not in disabled_providers
+        }
 
     # [NEW] Load provider-specific params
     litellm_provider_params = {"gemini_cli": {"project_id": os.getenv("GEMINI_CLI_PROJECT_ID")}}
