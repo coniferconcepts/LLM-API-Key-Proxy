@@ -1,3 +1,4 @@
+import importlib
 import sys
 import asyncio
 import random
@@ -9,8 +10,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from rotator_library.client import RotatingClient
-from rotator_library.routing_policy import RoutingPolicy, RoutingPolicyError
+client_module = importlib.import_module("rotator_library.client")
+routing_policy_module = importlib.import_module("rotator_library.routing_policy")
+
+RotatingClient = getattr(client_module, "RotatingClient")
+_merge_openrouter_extra_headers = getattr(client_module, "_merge_openrouter_extra_headers")
+RoutingPolicy = getattr(routing_policy_module, "RoutingPolicy")
+RoutingPolicyError = getattr(routing_policy_module, "RoutingPolicyError")
 
 
 def test_client_helper_rewrites_weighted_router_model():
@@ -125,3 +131,42 @@ def test_client_helper_rewrites_weighted_qwen3_5_model():
     assert decision is not None
     assert decision.strategy == "weighted"
     assert decision.excluded_providers == ["opencode_go"]
+
+
+def test_merge_openrouter_extra_headers_copies_attribution_from_request():
+    class Request:
+        headers = {
+            "HTTP-Referer": "https://opencode.ai",
+            "X-OpenRouter-Title": "OpenCode/opencode-router",
+            "X-Title": "OpenCode/opencode-router",
+            "X-OpenRouter-Categories": "cli-agent",
+        }
+
+    kwargs = _merge_openrouter_extra_headers({"messages": []}, Request())
+
+    assert kwargs["extra_headers"]["HTTP-Referer"] == "https://opencode.ai"
+    assert kwargs["extra_headers"]["X-OpenRouter-Title"] == "OpenCode/opencode-router"
+    assert kwargs["extra_headers"]["X-Title"] == "OpenCode/opencode-router"
+    assert kwargs["extra_headers"]["X-OpenRouter-Categories"] == "cli-agent"
+
+
+def test_merge_openrouter_extra_headers_preserves_existing_values():
+    class Request:
+        headers = {
+            "HTTP-Referer": "https://opencode.ai",
+            "X-OpenRouter-Title": "OpenCode/opencode-router",
+        }
+
+    kwargs = _merge_openrouter_extra_headers(
+        {
+            "extra_headers": {
+                "HTTP-Referer": "https://custom.example",
+                "Existing": "value",
+            }
+        },
+        Request(),
+    )
+
+    assert kwargs["extra_headers"]["HTTP-Referer"] == "https://custom.example"
+    assert kwargs["extra_headers"]["X-OpenRouter-Title"] == "OpenCode/opencode-router"
+    assert kwargs["extra_headers"]["Existing"] == "value"
