@@ -20,17 +20,21 @@ jobs:
   review-pr:
     # Bot check is in the issue_comment branch - workflow shows "skipped" for bot comments
     if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.action == 'opened' && github.event.pull_request.draft == false) ||
-      github.event.action == 'ready_for_review' ||
-      (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'Agent Monitored')) ||
+      secrets.BOT_APP_ID != '' &&
+      secrets.BOT_PRIVATE_KEY != '' &&
       (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        github.event.comment.user.login != 'mirrobot' &&
-        github.event.comment.user.login != 'mirrobot-agent' &&
-        github.event.comment.user.login != 'mirrobot-agent[bot]' &&
-        (contains(github.event.comment.body, '/mirrobot-review') || contains(github.event.comment.body, '/mirrobot_review'))
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.action == 'opened' && github.event.pull_request.draft == false) ||
+        github.event.action == 'ready_for_review' ||
+        (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'Agent Monitored')) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          github.event.comment.user.login != 'mirrobot' &&
+          github.event.comment.user.login != 'mirrobot-agent' &&
+          github.event.comment.user.login != 'mirrobot-agent[bot]' &&
+          (contains(github.event.comment.body, '/mirrobot-review') || contains(github.event.comment.body, '/mirrobot_review'))
+        )
       )
     runs-on: ubuntu-latest
     permissions:

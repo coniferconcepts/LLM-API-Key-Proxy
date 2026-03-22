@@ -12,6 +12,7 @@ on:
 
 jobs:
   check-issue:
+    if: ${{ secrets.BOT_APP_ID != '' && secrets.BOT_PRIVATE_KEY != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
