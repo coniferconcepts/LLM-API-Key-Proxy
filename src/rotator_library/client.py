@@ -65,6 +65,43 @@ class StreamedAPIError(Exception):
         self.data = data
 
 
+OPENROUTER_ATTRIBUTION_HEADER_KEYS = (
+    "HTTP-Referer",
+    "X-OpenRouter-Title",
+    "X-Title",
+    "X-OpenRouter-Categories",
+)
+
+
+def _get_request_header(request: Optional[Any], key: str) -> Optional[str]:
+    if request is None:
+        return None
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    if hasattr(headers, "get"):
+        value = headers.get(key)
+        if value is None:
+            value = headers.get(key.lower())
+        return value
+    if isinstance(headers, dict):
+        return headers.get(key) or headers.get(key.lower())
+    return None
+
+
+def _merge_openrouter_extra_headers(
+    litellm_kwargs: Dict[str, Any], request: Optional[Any]
+) -> Dict[str, Any]:
+    extra_headers = dict(litellm_kwargs.get("extra_headers") or {})
+    for key in OPENROUTER_ATTRIBUTION_HEADER_KEYS:
+        value = _get_request_header(request, key)
+        if value and key not in extra_headers:
+            extra_headers[key] = value
+    if extra_headers:
+        litellm_kwargs["extra_headers"] = extra_headers
+    return litellm_kwargs
+
+
 class RotatingClient:
     """
     A client that intelligently rotates and retries API keys using LiteLLM,
@@ -1698,6 +1735,8 @@ class RotatingClient:
                         ]
 
                     litellm_kwargs = sanitize_request_payload(litellm_kwargs, model)
+                    if provider == "openrouter":
+                        litellm_kwargs = _merge_openrouter_extra_headers(litellm_kwargs, request)
 
                     for attempt in range(self.max_retries):
                         try:
@@ -2431,6 +2470,8 @@ class RotatingClient:
                         ]
 
                     litellm_kwargs = sanitize_request_payload(litellm_kwargs, model)
+                    if provider == "openrouter":
+                        litellm_kwargs = _merge_openrouter_extra_headers(litellm_kwargs, request)
 
                     # If the provider is 'qwen_code', set the custom provider to 'qwen'
                     # and strip the prefix from the model name for LiteLLM.
