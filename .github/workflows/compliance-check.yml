@@ -62,18 +62,22 @@ jobs:
     # Bot check is in the issue_comment branch - workflow shows "skipped" for bot comments
     # Note: workflow_run is NOT in this condition - the trigger exists but job skips unless other conditions match
     if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request_target' && 
-       (github.event.action == 'ready_for_review' ||
-        (github.event.action == 'labeled' && contains(github.event.label.name, 'ready-for-merge')))) ||
+      secrets.BOT_APP_ID != '' &&
+      secrets.BOT_PRIVATE_KEY != '' &&
       (
-        github.event_name == 'issue_comment' && 
-        github.event.issue.pull_request &&
-        github.event.comment.user.login != 'mirrobot' &&
-        github.event.comment.user.login != 'mirrobot-agent' &&
-        github.event.comment.user.login != 'mirrobot-agent[bot]' &&
-        (contains(github.event.comment.body, '/mirrobot-check') || 
-         contains(github.event.comment.body, '/mirrobot_check'))
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request_target' && 
+         (github.event.action == 'ready_for_review' ||
+          (github.event.action == 'labeled' && contains(github.event.label.name, 'ready-for-merge')))) ||
+        (
+          github.event_name == 'issue_comment' && 
+          github.event.issue.pull_request &&
+          github.event.comment.user.login != 'mirrobot' &&
+          github.event.comment.user.login != 'mirrobot-agent' &&
+          github.event.comment.user.login != 'mirrobot-agent[bot]' &&
+          (contains(github.event.comment.body, '/mirrobot-check') || 
+           contains(github.event.comment.body, '/mirrobot_check'))
+        )
       )
     runs-on: ubuntu-latest
     

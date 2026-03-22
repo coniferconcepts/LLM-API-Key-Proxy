@@ -8,6 +8,8 @@ jobs:
   continuous-reply:
     # Skip if comment author is a bot (workflow will show as "skipped")
     if: |
+      secrets.BOT_APP_ID != '' &&
+      secrets.BOT_PRIVATE_KEY != '' &&
       github.event.comment.user.login != 'mirrobot' &&
       github.event.comment.user.login != 'mirrobot-agent' &&
       github.event.comment.user.login != 'mirrobot-agent[bot]' &&
