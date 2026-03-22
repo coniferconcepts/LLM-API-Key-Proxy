@@ -990,6 +990,13 @@ async def chat_completions(
             f"Handling reasoning parameters: model={model}, reasoning_effort={reasoning_effort}"
         )
 
+        if isinstance(model, str) and "/" not in model:
+            raise ValueError(
+                f"Plain alias model '{model}' is not supported on upstream port 8000. "
+                f"Use the weighted router on port 8001 for clean aliases, or send a provider-prefixed model "
+                f"such as 'ollama_cloud/{model}', 'chutes/...', or 'opencode_go/...'."
+            )
+
         # Log basic request info to console (this is a separate, simpler logger).
         log_request_to_console(
             url=str(request.url),
@@ -1025,6 +1032,8 @@ async def chat_completions(
         litellm.ContextWindowExceededError,
     ) as e:
         raise HTTPException(status_code=400, detail=f"Invalid Request: {str(e)}")
+    except HTTPException:
+        raise
     except litellm.AuthenticationError as e:
         raise HTTPException(status_code=401, detail=f"Authentication Error: {str(e)}")
     except litellm.RateLimitError as e:

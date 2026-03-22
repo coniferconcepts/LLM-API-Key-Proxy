@@ -990,6 +990,16 @@ class RotatingClient:
         decision = self.routing_policy.resolve(model)
         return decision.rewritten_model or model, decision
 
+    def _raise_unknown_provider_error(self, model: str, provider: str) -> None:
+        if "/" not in model:
+            raise ValueError(
+                f"Provider '{provider}' is not configured for upstream port 8000. "
+                f"Plain alias models like '{model}' belong on the weighted router at port 8001. "
+                f"For port 8000, use a provider-prefixed model such as 'ollama_cloud/{model}', "
+                f"'chutes/...', or 'opencode_go/...'."
+            )
+        raise ValueError(f"No API keys or OAuth credentials configured for provider: {provider}")
+
     def _log_route_decision(self, decision: Optional[RouteDecision]) -> None:
         if not decision or not decision.override_applied:
             return
@@ -1287,9 +1297,7 @@ class RotatingClient:
 
         provider = model.split("/")[0]
         if provider not in self.all_credentials:
-            raise ValueError(
-                f"No API keys or OAuth credentials configured for provider: {provider}"
-            )
+            self._raise_unknown_provider_error(model, provider)
 
         # Extract internal logging parameters (not passed to API)
         parent_log_dir = kwargs.pop("_parent_log_dir", None)
@@ -2027,6 +2035,8 @@ class RotatingClient:
             self._log_route_decision(route_decision)
 
         provider = model.split("/")[0]
+        if provider not in self.all_credentials:
+            self._raise_unknown_provider_error(model, provider)
 
         # Extract internal logging parameters (not passed to API)
         parent_log_dir = kwargs.pop("_parent_log_dir", None)

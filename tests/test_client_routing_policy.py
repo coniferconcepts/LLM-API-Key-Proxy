@@ -62,7 +62,8 @@ def test_load_model_routing_overrides_from_env(monkeypatch):
 
     overrides = client._load_model_routing_overrides_from_env()
 
-    assert overrides["nemotron-3-super"]["primary"] == "ollama"
+    assert overrides["nemotron-3-super"]["primary"] == "ollama_cloud"
+    assert overrides["nemotron-3-super"]["allowed_providers"] == ["ollama_cloud"]
 
 
 def test_invalid_model_routing_overrides_env_fails_closed(monkeypatch):
@@ -131,6 +132,31 @@ def test_client_helper_rewrites_weighted_qwen3_5_model():
     assert decision is not None
     assert decision.strategy == "weighted"
     assert decision.excluded_providers == ["opencode_go"]
+
+
+def test_unknown_upstream_alias_error_guides_users_to_weighted_router():
+    client = RotatingClient.__new__(RotatingClient)
+
+    with pytest.raises(ValueError, match="weighted router at port 8001") as exc_info:
+        client._raise_unknown_provider_error("qwen3.5", "qwen3.5")
+
+    message = str(exc_info.value)
+    assert "Plain alias models like 'qwen3.5' belong on the weighted router at port 8001" in message
+    assert "ollama_cloud/qwen3.5" in message
+    assert "opencode_go/..." in message
+
+
+def test_unknown_prefixed_provider_error_keeps_standard_message():
+    client = RotatingClient.__new__(RotatingClient)
+
+    with pytest.raises(
+        ValueError,
+        match="No API keys or OAuth credentials configured for provider: unknown_provider",
+    ):
+        client._raise_unknown_provider_error(
+            "unknown_provider/qwen3.5",
+            "unknown_provider",
+        )
 
 
 def test_merge_openrouter_extra_headers_copies_attribution_from_request():
