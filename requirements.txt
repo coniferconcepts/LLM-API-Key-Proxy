@@ -1,9 +1,9 @@
 # FastAPI framework for building the proxy server
-fastapi
+fastapi==0.135.2
 # ASGI server for running the FastAPI application
-uvicorn
+uvicorn==0.42.0
 # For loading environment variables from a .env file
-python-dotenv
+python-dotenv==1.0.1
 
 # Installs the local rotator_library in editable mode
 -e src/rotator_library
@@ -12,17 +12,17 @@ python-dotenv
 # Pinned to 1.82.0 — versions 1.82.7 and 1.82.8 were compromised (credential theft via litellm_init.pth)
 litellm==1.82.0
 
-filelock
-httpx
-aiofiles
-aiohttp
+filelock==3.16.1
+httpx==0.28.1
+aiofiles==24.1.0
+aiohttp==3.11.11
 
-colorlog
+colorlog==6.9.0
 
-rich
+rich==13.9.4
 
 # GUI for model filter configuration
-customtkinter
+customtkinter==5.2.2
 
 # For building the executable
-pyinstaller
+pyinstaller==6.11.1
