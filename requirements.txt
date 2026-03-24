@@ -9,7 +9,8 @@ python-dotenv
 -e src/rotator_library
 
 # A library for calling LLM APIs with a consistent format
-litellm
+# Pinned to 1.82.0 — versions 1.82.7 and 1.82.8 were compromised (credential theft via litellm_init.pth)
+litellm==1.82.0
 
 filelock
 httpx
