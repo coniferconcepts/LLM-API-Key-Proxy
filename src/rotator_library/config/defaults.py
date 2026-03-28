@@ -43,11 +43,7 @@ DEFAULT_MAX_RETRIES: int = 2
 # Override via environment variable: GLOBAL_TIMEOUT=<seconds>
 DEFAULT_GLOBAL_TIMEOUT: int = 30
 
-DEFAULT_ACQUIRE_TIMEOUT: int = 6
-
-# Key acquisition timeout in seconds
-# Override via environment variable: ACQUIRE_TIMEOUT=<seconds>
-DEFAULT_ACQUIRE_TIMEOUT: int = 15
+DEFAULT_ACQUIRE_TIMEOUT: int = 10
 
 # =============================================================================
 # TIER & PRIORITY DEFAULTS

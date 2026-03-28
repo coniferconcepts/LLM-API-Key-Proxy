@@ -643,7 +643,7 @@ async def lifespan(app: FastAPI):
 
     # Load global timeout from environment (default 30 seconds)
     global_timeout = int(os.getenv("GLOBAL_TIMEOUT", "30"))
-    acquire_timeout = int(os.getenv("ACQUIRE_TIMEOUT", "6"))
+    acquire_timeout = int(os.getenv("ACQUIRE_TIMEOUT", "10"))
 
     # The client now uses the root logger configuration
     client = RotatingClient(
