@@ -123,9 +123,21 @@ def extract_retry_after_from_body(error_body: Optional[str]) -> Optional[int]:
 
 
 class NoAvailableKeysError(Exception):
-    """Raised when no API keys are available for a request after waiting."""
+    """
+    Raised when no API keys are available for a request after waiting.
 
-    pass
+    Attributes:
+        message: Human-readable error message
+        code: Machine-readable classification code (e.g., 'acquisition_timeout_exhausted')
+    """
+
+    def __init__(self, message: str, code: str = "global_timeout_exhausted"):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+    def __str__(self):
+        return f"{self.message} (code={self.code})"
 
 
 class PreRequestCallbackError(Exception):
@@ -153,9 +165,7 @@ class CredentialNeedsReauthError(Exception):
 
     def __init__(self, credential_path: str, message: str = ""):
         self.credential_path = credential_path
-        self.message = (
-            message or f"Credential '{credential_path}' requires re-authentication"
-        )
+        self.message = message or f"Credential '{credential_path}' requires re-authentication"
         super().__init__(self.message)
 
 
@@ -176,8 +186,7 @@ class EmptyResponseError(Exception):
         self.provider = provider
         self.model = model
         self.message = (
-            message
-            or f"Empty response from {provider}/{model} after multiple retry attempts"
+            message or f"Empty response from {provider}/{model} after multiple retry attempts"
         )
         super().__init__(self.message)
 
@@ -202,8 +211,7 @@ class TransientQuotaError(Exception):
         self.provider = provider
         self.model = model
         self.message = (
-            message
-            or f"Transient 429 from {provider}/{model} after multiple retry attempts"
+            message or f"Transient 429 from {provider}/{model} after multiple retry attempts"
         )
         super().__init__(self.message)
 
@@ -343,10 +351,16 @@ class RequestErrorAccumulator:
         # Determine the primary failure reason
         if self.timeout_occurred:
             error_type = "proxy_timeout"
-            base_message = f"Request timed out after trying {self.total_credentials_tried} credential(s)"
+            error_code = "global_timeout_exhausted"
+            base_message = (
+                f"Request timed out after trying {self.total_credentials_tried} credential(s)"
+            )
         else:
             error_type = "proxy_all_credentials_exhausted"
-            base_message = f"All {self.total_credentials_tried} credential(s) exhausted for {self.provider}"
+            error_code = "all_credentials_exhausted"
+            base_message = (
+                f"All {self.total_credentials_tried} credential(s) exhausted for {self.provider}"
+            )
 
         # Build human-readable message
         message_parts = [base_message]
@@ -359,9 +373,7 @@ class RequestErrorAccumulator:
                     if err["status_code"] is not None
                     else err["error_type"]
                 )
-                message_parts.append(
-                    f"\n  • {err['credential']}: {status} - {err['message']}"
-                )
+                message_parts.append(f"\n  • {err['credential']}: {status} - {err['message']}")
 
         normal_summary = self.get_normal_error_summary()
         if normal_summary:
@@ -379,6 +391,7 @@ class RequestErrorAccumulator:
             "error": {
                 "message": "".join(message_parts),
                 "type": error_type,
+                "code": error_code,
                 "details": {
                     "model": self.model,
                     "provider": self.provider,
@@ -407,9 +420,7 @@ class RequestErrorAccumulator:
         parts = []
 
         if self.timeout_occurred:
-            parts.append(
-                f"TIMEOUT: {self.total_credentials_tried} creds tried for {self.model}"
-            )
+            parts.append(f"TIMEOUT: {self.total_credentials_tried} creds tried for {self.model}")
         else:
             parts.append(
                 f"ALL CREDS EXHAUSTED: {self.total_credentials_tried} tried for {self.model}"
@@ -555,9 +566,7 @@ def get_retry_after(error: Exception) -> Optional[int]:
                 pass  # Might be HTTP date format, skip for now
 
         # Check X-RateLimit-Reset header (Unix timestamp)
-        reset_header = headers.get("x-ratelimit-reset") or headers.get(
-            "X-RateLimit-Reset"
-        )
+        reset_header = headers.get("x-ratelimit-reset") or headers.get("X-RateLimit-Reset")
         if reset_header:
             try:
                 import time
@@ -775,9 +784,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 error_type="server_error", original_exception=e, status_code=status_code
             )
 
-    if isinstance(
-        e, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)
-    ):  # [NEW]
+    if isinstance(e, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):  # [NEW]
         return ClassifiedError(
             error_type="api_connection", original_exception=e, status_code=status_code
         )
@@ -871,9 +878,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
         )
 
     # Fallback for any other unclassified errors
-    return ClassifiedError(
-        error_type="unknown", original_exception=e, status_code=status_code
-    )
+    return ClassifiedError(error_type="unknown", original_exception=e, status_code=status_code)
 
 
 def is_rate_limit_error(e: Exception) -> bool:

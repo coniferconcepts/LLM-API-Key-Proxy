@@ -50,6 +50,7 @@ from .utils.suppress_litellm_warnings import suppress_litellm_serialization_warn
 from .config import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_GLOBAL_TIMEOUT,
+    DEFAULT_ACQUIRE_TIMEOUT,
     DEFAULT_ROTATION_TOLERANCE,
     DEFAULT_FAIR_CYCLE_DURATION,
     DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD,
@@ -116,6 +117,7 @@ class RotatingClient:
         usage_file_path: Optional[Union[str, Path]] = None,
         configure_logging: bool = True,
         global_timeout: int = DEFAULT_GLOBAL_TIMEOUT,
+        acquire_timeout: int = DEFAULT_ACQUIRE_TIMEOUT,
         abort_on_callback_error: bool = True,
         litellm_provider_params: Optional[Dict[str, Any]] = None,
         ignore_models: Optional[Dict[str, List[str]]] = None,
@@ -136,6 +138,7 @@ class RotatingClient:
             usage_file_path: Path to store usage statistics. If None, uses data_dir/key_usage.json
             configure_logging: Whether to configure library logging
             global_timeout: Global timeout for requests in seconds
+            acquire_timeout: Timeout for key acquisition in seconds (separate from global timeout)
             abort_on_callback_error: Whether to abort on pre-request callback errors
             litellm_provider_params: Provider-specific parameters for LiteLLM
             ignore_models: Models to ignore/blacklist per provider
@@ -220,6 +223,7 @@ class RotatingClient:
 
         self.max_retries = max_retries
         self.global_timeout = global_timeout
+        self.acquire_timeout = acquire_timeout
         self.abort_on_callback_error = abort_on_callback_error
 
         # Initialize provider plugins early so they can be used for rotation mode detection
@@ -1305,6 +1309,8 @@ class RotatingClient:
         # Establish a global deadline for the entire request lifecycle.
         deadline = time.time() + self.global_timeout
 
+        acquire_deadline = time.time() + self.acquire_timeout
+
         # Create transaction logger if request logging is enabled
         transaction_logger = None
         if self.enable_request_logging:
@@ -1480,6 +1486,7 @@ class RotatingClient:
                     available_keys=creds_to_try,
                     model=model,
                     deadline=deadline,
+                    acquire_deadline=acquire_deadline,
                     max_concurrent=max_concurrent,
                     credential_priorities=credential_priorities,
                     credential_tier_names=credential_tier_names,
@@ -2060,6 +2067,8 @@ class RotatingClient:
 
         deadline = time.time() + self.global_timeout
 
+        acquire_deadline = time.time() + self.acquire_timeout
+
         # Create transaction logger if request logging is enabled
         transaction_logger = None
         if self.enable_request_logging:
@@ -2216,6 +2225,7 @@ class RotatingClient:
                         available_keys=creds_to_try,
                         model=model,
                         deadline=deadline,
+                        acquire_deadline=acquire_deadline,
                         max_concurrent=max_concurrent,
                         credential_priorities=credential_priorities,
                         credential_tier_names=credential_tier_names,
@@ -2791,7 +2801,13 @@ class RotatingClient:
             lib_logger.error(
                 f"A streaming request failed because no keys were available within the time budget: {e}"
             )
-            error_data = {"error": {"message": str(e), "type": "proxy_busy"}}
+            error_data = {
+                "error": {
+                    "message": e.message,
+                    "type": "proxy_busy",
+                    "code": e.code,
+                }
+            }
             yield f"data: {json.dumps(error_data)}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:

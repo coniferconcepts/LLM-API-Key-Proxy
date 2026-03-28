@@ -73,9 +73,7 @@ class UsageManager:
         provider_rotation_modes: Optional[Dict[str, str]] = None,
         provider_plugins: Optional[Dict[str, Any]] = None,
         priority_multipliers: Optional[Dict[str, Dict[int, int]]] = None,
-        priority_multipliers_by_mode: Optional[
-            Dict[str, Dict[str, Dict[int, int]]]
-        ] = None,
+        priority_multipliers_by_mode: Optional[Dict[str, Dict[str, Dict[int, int]]]] = None,
         sequential_fallback_multipliers: Optional[Dict[str, int]] = None,
         fair_cycle_enabled: Optional[Dict[str, bool]] = None,
         fair_cycle_tracking_mode: Optional[Dict[str, str]] = None,
@@ -167,9 +165,7 @@ class UsageManager:
 
         if daily_reset_time_utc:
             hour, minute = map(int, daily_reset_time_utc.split(":"))
-            self.daily_reset_time_utc = dt_time(
-                hour=hour, minute=minute, tzinfo=timezone.utc
-            )
+            self.daily_reset_time_utc = dt_time(hour=hour, minute=minute, tzinfo=timezone.utc)
         else:
             self.daily_reset_time_utc = None
 
@@ -320,9 +316,7 @@ class UsageManager:
 
         return None
 
-    def _get_model_quota_group_by_provider(
-        self, provider: str, model: str
-    ) -> Optional[str]:
+    def _get_model_quota_group_by_provider(self, provider: str, model: str) -> Optional[str]:
         """
         Get quota group for a model using provider name instead of credential.
 
@@ -382,9 +376,7 @@ class UsageManager:
             try:
                 calculated = int(max_requests)
             except (ValueError, TypeError):
-                lib_logger.warning(
-                    f"Invalid cap value '{max_requests}' for {provider}/{model}"
-                )
+                lib_logger.warning(f"Invalid cap value '{max_requests}' for {provider}/{model}")
                 return None
 
         # Clamp to actual max (can only be MORE restrictive)
@@ -470,9 +462,7 @@ class UsageManager:
         natural_reset_ts = model_data.get("quota_reset_ts")
 
         # Resolve custom cap max
-        custom_max = self._resolve_custom_cap_max(
-            provider, model, cap_config, actual_max
-        )
+        custom_max = self._resolve_custom_cap_max(provider, model, cap_config, actual_max)
         if custom_max is None:
             return False
 
@@ -528,9 +518,7 @@ class UsageManager:
             if self._is_fair_cycle_enabled(provider, rotation_mode):
                 tier_key = self._get_tier_key(provider, priority)
                 tracking_key = self._get_tracking_key(credential, model, provider)
-                self._mark_credential_exhausted(
-                    credential, provider, tier_key, tracking_key
-                )
+                self._mark_credential_exhausted(credential, provider, tier_key, tracking_key)
 
         return True
 
@@ -595,9 +583,7 @@ class UsageManager:
         Returns:
             Cycle data dict or None if not exists
         """
-        return (
-            self._cycle_exhausted.get(provider, {}).get(tier_key, {}).get(tracking_key)
-        )
+        return self._cycle_exhausted.get(provider, {}).get(tier_key, {}).get(tracking_key)
 
     def _ensure_cycle_structure(
         self, provider: str, tier_key: str, tracking_key: str
@@ -663,9 +649,7 @@ class UsageManager:
             return False
         return credential in cycle_data.get("exhausted", set())
 
-    def _is_cycle_expired(
-        self, provider: str, tier_key: str, tracking_key: str
-    ) -> bool:
+    def _is_cycle_expired(self, provider: str, tier_key: str, tracking_key: str) -> bool:
         """
         Check if the current cycle has exceeded its duration.
         """
@@ -705,9 +689,7 @@ class UsageManager:
         # If available credentials are provided, reset when none remain usable
         if available_not_on_cooldown is not None:
             has_available = any(
-                not self._is_credential_exhausted_in_cycle(
-                    cred, provider, tier_key, tracking_key
-                )
+                not self._is_credential_exhausted_in_cycle(cred, provider, tier_key, tracking_key)
                 for cred in available_not_on_cooldown
             )
             if not has_available and len(all_credentials_in_tier) > 0:
@@ -715,10 +697,7 @@ class UsageManager:
 
         exhausted = cycle_data.get("exhausted", set())
         # All must be exhausted (and there must be at least one credential)
-        return (
-            len(exhausted) >= len(all_credentials_in_tier)
-            and len(all_credentials_in_tier) > 0
-        )
+        return len(exhausted) >= len(all_credentials_in_tier) and len(all_credentials_in_tier) > 0
 
     def _reset_cycle(self, provider: str, tier_key: str, tracking_key: str) -> None:
         """
@@ -760,11 +739,7 @@ class UsageManager:
             # Within-tier: only credentials with matching priority
             priority = int(tier_key)
             if credential_priorities:
-                return [
-                    k
-                    for k in available_keys
-                    if credential_priorities.get(k, 999) == priority
-                ]
+                return [k for k in available_keys if credential_priorities.get(k, 999) == priority]
             return list(available_keys)
 
     def _count_fair_cycle_excluded(
@@ -788,15 +763,11 @@ class UsageManager:
         """
         count = 0
         for cred in candidates:
-            if self._is_credential_exhausted_in_cycle(
-                cred, provider, tier_key, tracking_key
-            ):
+            if self._is_credential_exhausted_in_cycle(cred, provider, tier_key, tracking_key):
                 count += 1
         return count
 
-    def _get_priority_multiplier(
-        self, provider: str, priority: int, rotation_mode: str
-    ) -> int:
+    def _get_priority_multiplier(self, provider: str, priority: int, rotation_mode: str) -> int:
         """
         Get the concurrency multiplier for a provider/priority/mode combination.
 
@@ -1103,9 +1074,7 @@ class UsageManager:
         # Some providers (antigravity) count failed requests against quota
         provider = self._get_provider_from_credential(key)
         usage_field = (
-            "request_count"
-            if provider in self._REQUEST_COUNT_PROVIDERS
-            else "success_count"
+            "request_count" if provider in self._REQUEST_COUNT_PROVIDERS else "success_count"
         )
 
         # For providers with synced quota groups (antigravity), request_count
@@ -1172,9 +1141,7 @@ class UsageManager:
 
         if max_requests:
             remaining = max_requests - request_count
-            remaining_pct = (
-                int((remaining / max_requests) * 100) if max_requests > 0 else 0
-            )
+            remaining_pct = int((remaining / max_requests) * 100) if max_requests > 0 else 0
             return f"quota: {request_count}/{max_requests} [{remaining_pct}%]"
         else:
             return f"quota: {request_count}"
@@ -1205,9 +1172,7 @@ class UsageManager:
 
         return "daily"
 
-    def _get_usage_count(
-        self, key: str, model: str, field: str = "success_count"
-    ) -> int:
+    def _get_usage_count(self, key: str, model: str, field: str = "success_count") -> int:
         """
         Get the current usage count for a model from the appropriate usage structure.
 
@@ -1239,9 +1204,7 @@ class UsageManager:
             return key_data.get("models", {}).get(model, {}).get(field, 0)
         else:
             # Legacy structure: key_data["daily"]["models"][model][field]
-            return (
-                key_data.get("daily", {}).get("models", {}).get(model, {}).get(field, 0)
-            )
+            return key_data.get("daily", {}).get("models", {}).get(model, {}).get(field, 0)
 
     # =========================================================================
     # TIMESTAMP FORMATTING HELPERS
@@ -1289,18 +1252,14 @@ class UsageManager:
                 # Add readable window start time
                 window_start = model_stats.get("window_start_ts")
                 if window_start:
-                    model_stats["window_started"] = self._format_timestamp_local(
-                        window_start
-                    )
+                    model_stats["window_started"] = self._format_timestamp_local(window_start)
                 elif "window_started" in model_stats:
                     del model_stats["window_started"]
 
                 # Add readable reset time
                 quota_reset = model_stats.get("quota_reset_ts")
                 if quota_reset:
-                    model_stats["quota_resets"] = self._format_timestamp_local(
-                        quota_reset
-                    )
+                    model_stats["quota_resets"] = self._format_timestamp_local(quota_reset)
                 elif "quota_resets" in model_stats:
                     del model_stats["quota_resets"]
 
@@ -1338,13 +1297,9 @@ class UsageManager:
 
         def sort_key(item: Tuple[str, int]) -> Tuple[int, int, float, str]:
             cred, usage_count = item
-            priority = (
-                credential_priorities.get(cred, 999) if credential_priorities else 999
-            )
+            priority = credential_priorities.get(cred, 999) if credential_priorities else 999
             last_used = (
-                self._usage_data.get(cred, {}).get("last_used_ts", 0)
-                if self._usage_data
-                else 0
+                self._usage_data.get(cred, {}).get("last_used_ts", 0) if self._usage_data else 0
             )
             return (
                 priority,  # ASC: lower priority number = higher priority
@@ -1431,9 +1386,7 @@ class UsageManager:
 
         # Log restoration summary
         total_cycles = sum(
-            len(tracking)
-            for tier in self._cycle_exhausted.values()
-            for tracking in tier.values()
+            len(tracking) for tier in self._cycle_exhausted.values() for tracking in tier.values()
         )
         if total_cycles > 0:
             lib_logger.info(f"Restored {total_cycles} active fair cycle(s) from disk")
@@ -1461,9 +1414,7 @@ class UsageManager:
                 # File deleted between exists check and open
                 self._usage_data = {}
             except json.JSONDecodeError as e:
-                lib_logger.warning(
-                    f"Corrupted usage file {self.file_path}: {e}. Starting fresh."
-                )
+                lib_logger.warning(f"Corrupted usage file {self.file_path}: {e}. Starting fresh.")
                 self._usage_data = {}
             except (OSError, PermissionError, IOError) as e:
                 lib_logger.warning(
@@ -1542,9 +1493,7 @@ class UsageManager:
                 normalized_model = self._normalize_model(key, model)
 
                 # Skip if model-specific cooldown is active
-                if (
-                    key_data.get("model_cooldowns", {}).get(normalized_model) or 0
-                ) > now:
+                if (key_data.get("model_cooldowns", {}).get(normalized_model) or 0) > now:
                     continue
 
                 available.append(key)
@@ -1605,9 +1554,7 @@ class UsageManager:
                     # Check each credential against its own tier's exhausted set
                     for key in not_on_cooldown:
                         key_priority = (
-                            credential_priorities.get(key, 999)
-                            if credential_priorities
-                            else 999
+                            credential_priorities.get(key, 999) if credential_priorities else 999
                         )
                         tier_key = self._get_tier_key(provider, key_priority)
                         tracking_key = self._get_tracking_key(key, model, provider)
@@ -1661,9 +1608,7 @@ class UsageManager:
                         soonest_end = key_cooldown
 
                 # Check model-level cooldown
-                model_cooldown = (
-                    key_data.get("model_cooldowns", {}).get(normalized_model) or 0
-                )
+                model_cooldown = key_data.get("model_cooldowns", {}).get(normalized_model) or 0
                 if model_cooldown > now:
                     if soonest_end is None or model_cooldown < soonest_end:
                         soonest_end = model_cooldown
@@ -1700,14 +1645,10 @@ class UsageManager:
                     )
                 else:
                     # Credential-level window reset (legacy)
-                    needs_saving |= await self._check_window_reset(
-                        key, data, reset_config, now_ts
-                    )
+                    needs_saving |= await self._check_window_reset(key, data, reset_config, now_ts)
             elif self.daily_reset_time_utc:
                 # Legacy daily reset
-                needs_saving |= await self._check_daily_reset(
-                    key, data, now_utc, today_str, now_ts
-                )
+                needs_saving |= await self._check_daily_reset(key, data, now_utc, today_str, now_ts)
 
         if needs_saving:
             await self._save_usage()
@@ -1755,9 +1696,7 @@ class UsageManager:
                     continue  # Already handled this group
 
                 # Check if entire group should reset
-                if self._should_group_reset(
-                    key, group, models_data, window_seconds, now_ts
-                ):
+                if self._should_group_reset(key, group, models_data, window_seconds, now_ts):
                     # Archive and reset all models in group
                     grouped_models = self._get_grouped_models(key, group)
                     archived_count = 0
@@ -1980,20 +1919,14 @@ class UsageManager:
         last_reset_dt = None
         if last_reset_str:
             try:
-                last_reset_dt = datetime.fromisoformat(last_reset_str).replace(
-                    tzinfo=timezone.utc
-                )
+                last_reset_dt = datetime.fromisoformat(last_reset_str).replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
 
         # Determine the reset threshold for today
-        reset_threshold_today = datetime.combine(
-            now_utc.date(), self.daily_reset_time_utc
-        )
+        reset_threshold_today = datetime.combine(now_utc.date(), self.daily_reset_time_utc)
 
-        if not (
-            last_reset_dt is None or last_reset_dt < reset_threshold_today <= now_utc
-        ):
+        if not (last_reset_dt is None or last_reset_dt < reset_threshold_today <= now_utc):
             return False
 
         lib_logger.debug(f"Performing daily reset for key {mask_credential(key)}")
@@ -2016,9 +1949,7 @@ class UsageManager:
 
         return True
 
-    def _archive_to_global(
-        self, data: Dict[str, Any], source_data: Dict[str, Any]
-    ) -> None:
+    def _archive_to_global(self, data: Dict[str, Any], source_data: Dict[str, Any]) -> None:
         """
         Archive usage stats from a source field (daily/window) to global.
 
@@ -2046,9 +1977,7 @@ class UsageManager:
             global_model_stats["completion_tokens"] += stats.get("completion_tokens", 0)
             global_model_stats["approx_cost"] += stats.get("approx_cost", 0.0)
 
-    def _preserve_unexpired_cooldowns(
-        self, key: str, data: Dict[str, Any], now_ts: float
-    ) -> None:
+    def _preserve_unexpired_cooldowns(self, key: str, data: Dict[str, Any], now_ts: float) -> None:
         """
         Preserve unexpired cooldowns during reset (important for long quota cooldowns).
 
@@ -2065,9 +1994,7 @@ class UsageManager:
                 if end_time > now_ts
             }
             if active_cooldowns:
-                max_remaining = max(
-                    end_time - now_ts for end_time in active_cooldowns.values()
-                )
+                max_remaining = max(end_time - now_ts for end_time in active_cooldowns.values())
                 hours_remaining = max_remaining / 3600
                 lib_logger.info(
                     f"Preserving {len(active_cooldowns)} active cooldown(s) "
@@ -2157,6 +2084,7 @@ class UsageManager:
         available_keys: List[str],
         model: str,
         deadline: float,
+        acquire_deadline: Optional[float] = None,
         max_concurrent: int = 1,
         credential_priorities: Optional[Dict[str, int]] = None,
         credential_tier_names: Optional[Dict[str, str]] = None,
@@ -2175,7 +2103,8 @@ class UsageManager:
         Args:
             available_keys: List of credential identifiers to choose from
             model: Model name being requested
-            deadline: Timestamp after which to stop trying
+            deadline: Timestamp after which to stop trying (global timeout)
+            acquire_deadline: Timestamp after which acquisition timeout occurs (separate budget)
             max_concurrent: Maximum concurrent requests allowed per credential
             credential_priorities: Optional dict mapping credentials to priority levels (1=highest)
             credential_tier_names: Optional dict mapping credentials to tier names (for logging)
@@ -2201,8 +2130,11 @@ class UsageManager:
             self._normalize_model(available_keys[0], model) if available_keys else model
         )
 
-        # This loop continues as long as the global deadline has not been met.
-        while time.time() < deadline:
+        # Use acquire_deadline for the acquisition loop if provided, otherwise use deadline
+        acquisition_deadline = acquire_deadline if acquire_deadline is not None else deadline
+
+        # This loop continues as long as the acquisition deadline has not been met.
+        while time.time() < acquisition_deadline:
             now = time.time()
 
             # Group credentials by priority level (if priorities provided)
@@ -2215,8 +2147,7 @@ class UsageManager:
 
                         # Skip keys on cooldown (use normalized model for lookup)
                         if (key_data.get("key_cooldown_until") or 0) > now or (
-                            key_data.get("model_cooldowns", {}).get(normalized_model)
-                            or 0
+                            key_data.get("model_cooldowns", {}).get(normalized_model) or 0
                         ) > now:
                             continue
 
@@ -2243,9 +2174,7 @@ class UsageManager:
                     rotation_mode = self._get_rotation_mode(provider)
 
                     # Fair cycle filtering
-                    if provider and self._is_fair_cycle_enabled(
-                        provider, rotation_mode
-                    ):
+                    if provider and self._is_fair_cycle_enabled(provider, rotation_mode):
                         tier_key = self._get_tier_key(provider, priority_level)
                         tracking_key = self._get_tracking_key(
                             keys_in_priority[0][0] if keys_in_priority else "",
@@ -2267,9 +2196,7 @@ class UsageManager:
                             tier_key,
                             tracking_key,
                             all_tier_creds,
-                            available_not_on_cooldown=[
-                                key for key, _ in keys_in_priority
-                            ],
+                            available_not_on_cooldown=[key for key, _ in keys_in_priority],
                         ):
                             self._reset_cycle(provider, tier_key, tracking_key)
 
@@ -2298,10 +2225,7 @@ class UsageManager:
                         if not key_state["models_in_use"]:
                             tier1_keys.append((key, usage_count))
                         # Tier 2: Keys that can accept more concurrent requests
-                        elif (
-                            key_state["models_in_use"].get(model, 0)
-                            < effective_max_concurrent
-                        ):
+                        elif key_state["models_in_use"].get(model, 0) < effective_max_concurrent:
                             tier2_keys.append((key, usage_count))
 
                     if rotation_mode == "sequential":
@@ -2309,13 +2233,9 @@ class UsageManager:
                         # Keep all candidates in sorted order (no filtering to single key)
                         selection_method = "sequential"
                         if tier1_keys:
-                            tier1_keys = self._sort_sequential(
-                                tier1_keys, credential_priorities
-                            )
+                            tier1_keys = self._sort_sequential(tier1_keys, credential_priorities)
                         if tier2_keys:
-                            tier2_keys = self._sort_sequential(
-                                tier2_keys, credential_priorities
-                            )
+                            tier2_keys = self._sort_sequential(tier2_keys, credential_priorities)
                     elif self.rotation_tolerance > 0:
                         # Balanced mode with weighted randomness
                         selection_method = "weighted-random"
@@ -2323,16 +2243,12 @@ class UsageManager:
                             selected_key = self._select_weighted_random(
                                 tier1_keys, self.rotation_tolerance
                             )
-                            tier1_keys = [
-                                (k, u) for k, u in tier1_keys if k == selected_key
-                            ]
+                            tier1_keys = [(k, u) for k, u in tier1_keys if k == selected_key]
                         if tier2_keys:
                             selected_key = self._select_weighted_random(
                                 tier2_keys, self.rotation_tolerance
                             )
-                            tier2_keys = [
-                                (k, u) for k, u in tier2_keys if k == selected_key
-                            ]
+                            tier2_keys = [(k, u) for k, u in tier2_keys if k == selected_key]
                     else:
                         # Deterministic: sort by usage within each tier
                         selection_method = "least-used"
@@ -2384,9 +2300,7 @@ class UsageManager:
 
                 if not all_potential_keys:
                     # All credentials are on cooldown - check if waiting makes sense
-                    soonest_end = await self.get_soonest_cooldown_end(
-                        available_keys, model
-                    )
+                    soonest_end = await self.get_soonest_cooldown_end(available_keys, model)
 
                     if soonest_end is None:
                         # No cooldowns active but no keys available (shouldn't happen)
@@ -2396,7 +2310,7 @@ class UsageManager:
                         await asyncio.sleep(1)
                         continue
 
-                    remaining_budget = deadline - time.time()
+                    remaining_budget = acquisition_deadline - time.time()
                     wait_needed = soonest_end - time.time()
 
                     if wait_needed > remaining_budget:
@@ -2448,8 +2362,7 @@ class UsageManager:
 
                         # Skip keys on cooldown (use normalized model for lookup)
                         if (key_data.get("key_cooldown_until") or 0) > now or (
-                            key_data.get("model_cooldowns", {}).get(normalized_model)
-                            or 0
+                            key_data.get("model_cooldowns", {}).get(normalized_model) or 0
                         ) > now:
                             continue
 
@@ -2462,10 +2375,7 @@ class UsageManager:
                         if not key_state["models_in_use"]:
                             tier1_keys.append((key, usage_count))
                         # Tier 2: Keys that can accept more concurrent requests for this model.
-                        elif (
-                            key_state["models_in_use"].get(model, 0)
-                            < effective_max_concurrent
-                        ):
+                        elif key_state["models_in_use"].get(model, 0) < effective_max_concurrent:
                             tier2_keys.append((key, usage_count))
 
                 # Fair cycle filtering (non-priority case)
@@ -2491,9 +2401,7 @@ class UsageManager:
                         tier_key,
                         tracking_key,
                         all_tier_creds,
-                        available_not_on_cooldown=[
-                            key for key, _ in (tier1_keys + tier2_keys)
-                        ],
+                        available_not_on_cooldown=[key for key, _ in (tier1_keys + tier2_keys)],
                     ):
                         self._reset_cycle(provider, tier_key, tracking_key)
 
@@ -2518,13 +2426,9 @@ class UsageManager:
                     # Keep all candidates in sorted order (no filtering to single key)
                     selection_method = "sequential"
                     if tier1_keys:
-                        tier1_keys = self._sort_sequential(
-                            tier1_keys, credential_priorities
-                        )
+                        tier1_keys = self._sort_sequential(tier1_keys, credential_priorities)
                     if tier2_keys:
-                        tier2_keys = self._sort_sequential(
-                            tier2_keys, credential_priorities
-                        )
+                        tier2_keys = self._sort_sequential(tier2_keys, credential_priorities)
                 elif self.rotation_tolerance > 0:
                     # Balanced mode with weighted randomness
                     selection_method = "weighted-random"
@@ -2532,16 +2436,12 @@ class UsageManager:
                         selected_key = self._select_weighted_random(
                             tier1_keys, self.rotation_tolerance
                         )
-                        tier1_keys = [
-                            (k, u) for k, u in tier1_keys if k == selected_key
-                        ]
+                        tier1_keys = [(k, u) for k, u in tier1_keys if k == selected_key]
                     if tier2_keys:
                         selected_key = self._select_weighted_random(
                             tier2_keys, self.rotation_tolerance
                         )
-                        tier2_keys = [
-                            (k, u) for k, u in tier2_keys if k == selected_key
-                        ]
+                        tier2_keys = [(k, u) for k, u in tier2_keys if k == selected_key]
                 else:
                     # Deterministic: sort by usage within each tier
                     selection_method = "least-used"
@@ -2555,9 +2455,7 @@ class UsageManager:
                         if not state["models_in_use"]:
                             state["models_in_use"][model] = 1
                             tier_name = (
-                                credential_tier_names.get(key)
-                                if credential_tier_names
-                                else None
+                                credential_tier_names.get(key) if credential_tier_names else None
                             )
                             tier_info = f"tier: {tier_name}, " if tier_name else ""
                             quota_display = self._get_quota_display(key, model)
@@ -2575,9 +2473,7 @@ class UsageManager:
                         if current_count < effective_max_concurrent:
                             state["models_in_use"][model] = current_count + 1
                             tier_name = (
-                                credential_tier_names.get(key)
-                                if credential_tier_names
-                                else None
+                                credential_tier_names.get(key) if credential_tier_names else None
                             )
                             tier_info = f"tier: {tier_name}, " if tier_name else ""
                             quota_display = self._get_quota_display(key, model)
@@ -2588,16 +2484,12 @@ class UsageManager:
                             return key
 
                 # If all eligible keys are locked, wait for a key to be released.
-                lib_logger.info(
-                    "All eligible keys are currently locked for this model. Waiting..."
-                )
+                lib_logger.info("All eligible keys are currently locked for this model. Waiting...")
 
                 all_potential_keys = tier1_keys + tier2_keys
                 if not all_potential_keys:
                     # All credentials are on cooldown - check if waiting makes sense
-                    soonest_end = await self.get_soonest_cooldown_end(
-                        available_keys, model
-                    )
+                    soonest_end = await self.get_soonest_cooldown_end(available_keys, model)
 
                     if soonest_end is None:
                         # No cooldowns active but no keys available (shouldn't happen)
@@ -2607,7 +2499,7 @@ class UsageManager:
                         await asyncio.sleep(1)
                         continue
 
-                    remaining_budget = deadline - time.time()
+                    remaining_budget = acquisition_deadline - time.time()
                     wait_needed = soonest_end - time.time()
 
                     if wait_needed > remaining_budget:
@@ -2631,21 +2523,19 @@ class UsageManager:
 
             try:
                 async with wait_condition:
-                    remaining_budget = deadline - time.time()
+                    remaining_budget = acquisition_deadline - time.time()
                     if remaining_budget <= 0:
                         break  # Exit if the budget has already been exceeded.
                     # Wait for a notification, but no longer than the remaining budget or 1 second.
-                    await asyncio.wait_for(
-                        wait_condition.wait(), timeout=min(1, remaining_budget)
-                    )
+                    await asyncio.wait_for(wait_condition.wait(), timeout=min(1, remaining_budget))
                 lib_logger.info("Notified that a key was released. Re-evaluating...")
             except asyncio.TimeoutError:
                 # This is not an error, just a timeout for the wait. The main loop will re-evaluate.
                 lib_logger.info("Wait timed out. Re-evaluating for any available key.")
 
-        # If the loop exits, it means the deadline was exceeded.
         raise NoAvailableKeysError(
-            f"Could not acquire a key for model {model} within the global time budget."
+            f"Could not acquire a key for model {model} within the acquisition time budget.",
+            code="acquisition_timeout_exhausted",
         )
 
     async def release_key(self, key: str, model: str):
@@ -2697,9 +2587,7 @@ class UsageManager:
             today_utc_str = datetime.now(timezone.utc).date().isoformat()
 
             reset_config = self._get_usage_reset_config(key)
-            reset_mode = (
-                reset_config.get("mode", "credential") if reset_config else "credential"
-            )
+            reset_mode = reset_config.get("mode", "credential") if reset_config else "credential"
 
             if reset_mode == "per_model":
                 # New per-model structure
@@ -2738,9 +2626,7 @@ class UsageManager:
                     model_data["window_start_ts"] = now_ts
 
                     # Set expected quota reset time from provider config
-                    window_seconds = (
-                        reset_config.get("window_seconds", 0) if reset_config else 0
-                    )
+                    window_seconds = reset_config.get("window_seconds", 0) if reset_config else 0
                     if window_seconds > 0:
                         model_data["quota_reset_ts"] = now_ts + window_seconds
 
@@ -2783,21 +2669,15 @@ class UsageManager:
                             max_req = model_data.get("quota_max_requests")
                             if max_req:
                                 other_model_data["quota_max_requests"] = max_req
-                                other_model_data["quota_display"] = (
-                                    f"{new_request_count}/{max_req}"
-                                )
+                                other_model_data["quota_display"] = f"{new_request_count}/{max_req}"
 
                 # Update quota_display if max_requests is set (Antigravity-specific)
                 max_req = model_data.get("quota_max_requests")
                 if max_req:
-                    model_data["quota_display"] = (
-                        f"{model_data['request_count']}/{max_req}"
-                    )
+                    model_data["quota_display"] = f"{model_data['request_count']}/{max_req}"
 
                 # Check custom cap
-                if self._check_and_apply_custom_cap(
-                    key, model, model_data["request_count"]
-                ):
+                if self._check_and_apply_custom_cap(key, model, model_data["request_count"]):
                     # Custom cap exceeded, cooldown applied
                     # Continue to record tokens/cost but credential will be skipped next time
                     pass
@@ -2868,9 +2748,7 @@ class UsageManager:
                         usage_data_ref.get("prompt_tokens_cached", 0) + cached_tokens
                     )
 
-                usage_data_ref["completion_tokens"] += getattr(
-                    usage, "completion_tokens", 0
-                )
+                usage_data_ref["completion_tokens"] += getattr(usage, "completion_tokens", 0)
                 lib_logger.info(
                     f"Recorded usage from response object for key {mask_credential(key)}"
                 )
@@ -2889,9 +2767,7 @@ class UsageManager:
                             model_info = litellm.get_model_info(model)
                             input_cost = model_info.get("input_cost_per_token")
                             if input_cost:
-                                cost = (
-                                    completion_response.usage.prompt_tokens * input_cost
-                                )
+                                cost = completion_response.usage.prompt_tokens * input_cost
                             else:
                                 cost = None
                         else:
@@ -2902,9 +2778,7 @@ class UsageManager:
                         if cost is not None:
                             usage_data_ref["approx_cost"] += cost
                 except Exception as e:
-                    lib_logger.warning(
-                        f"Could not calculate cost for model {model}: {e}"
-                    )
+                    lib_logger.warning(f"Could not calculate cost for model {model}: {e}")
             elif isinstance(completion_response, asyncio.Future) or hasattr(
                 completion_response, "__aiter__"
             ):
@@ -2950,9 +2824,7 @@ class UsageManager:
             today_utc_str = datetime.now(timezone.utc).date().isoformat()
 
             reset_config = self._get_usage_reset_config(key)
-            reset_mode = (
-                reset_config.get("mode", "credential") if reset_config else "credential"
-            )
+            reset_mode = reset_config.get("mode", "credential") if reset_config else "credential"
 
             # Initialize key data with appropriate structure
             if reset_mode == "per_model":
@@ -2993,16 +2865,13 @@ class UsageManager:
             # Used to determine if this is a fresh exhaustion vs re-processing
             existing_cooldown_before = model_cooldowns.get(model)
             was_already_on_cooldown = (
-                existing_cooldown_before is not None
-                and existing_cooldown_before > now_ts
+                existing_cooldown_before is not None and existing_cooldown_before > now_ts
             )
 
             if classified_error.error_type == "quota_exceeded":
                 # Quota exhausted - use authoritative reset timestamp if available
                 quota_reset_ts = classified_error.quota_reset_timestamp
-                cooldown_seconds = (
-                    classified_error.retry_after or COOLDOWN_RATE_LIMIT_DEFAULT
-                )
+                cooldown_seconds = classified_error.retry_after or COOLDOWN_RATE_LIMIT_DEFAULT
 
                 if quota_reset_ts and reset_mode == "per_model":
                     # Set quota_reset_ts on model - this becomes authoritative stats reset time
@@ -3062,23 +2931,17 @@ class UsageManager:
                             max_req = model_data.get("quota_max_requests")
                             if max_req:
                                 group_model_data["quota_max_requests"] = max_req
-                                group_model_data["quota_display"] = (
-                                    f"{new_request_count}/{max_req}"
-                                )
+                                group_model_data["quota_display"] = f"{new_request_count}/{max_req}"
                             # Also set transient cooldown for selection logic
                             model_cooldowns[grouped_model] = quota_reset_ts
 
-                        reset_dt = datetime.fromtimestamp(
-                            quota_reset_ts, tz=timezone.utc
-                        )
+                        reset_dt = datetime.fromtimestamp(quota_reset_ts, tz=timezone.utc)
                         lib_logger.info(
                             f"Quota exhausted for group '{group}' ({len(grouped_models)} models) "
                             f"on {mask_credential(key)}. Resets at {reset_dt.isoformat()}"
                         )
                     else:
-                        reset_dt = datetime.fromtimestamp(
-                            quota_reset_ts, tz=timezone.utc
-                        )
+                        reset_dt = datetime.fromtimestamp(quota_reset_ts, tz=timezone.utc)
                         hours = (quota_reset_ts - now_ts) / 3600
                         lib_logger.info(
                             f"Quota exhausted for model {model} on {mask_credential(key)}. "
@@ -3101,9 +2964,7 @@ class UsageManager:
                 # This prevents re-marking after cycle reset
                 if not was_already_on_cooldown:
                     effective_cooldown = (
-                        (quota_reset_ts - now_ts)
-                        if quota_reset_ts
-                        else (cooldown_seconds or 0)
+                        (quota_reset_ts - now_ts) if quota_reset_ts else (cooldown_seconds or 0)
                     )
                     provider = self._get_provider_from_credential(key)
                     if provider:
@@ -3113,18 +2974,14 @@ class UsageManager:
                             if self._is_fair_cycle_enabled(provider, rotation_mode):
                                 priority = self._get_credential_priority(key, provider)
                                 tier_key = self._get_tier_key(provider, priority)
-                                tracking_key = self._get_tracking_key(
-                                    key, model, provider
-                                )
+                                tracking_key = self._get_tracking_key(key, model, provider)
                                 self._mark_credential_exhausted(
                                     key, provider, tier_key, tracking_key
                                 )
 
             elif classified_error.error_type == "rate_limit":
                 # Transient rate limit - just set short cooldown (does NOT set quota_reset_ts)
-                cooldown_seconds = (
-                    classified_error.retry_after or COOLDOWN_RATE_LIMIT_DEFAULT
-                )
+                cooldown_seconds = classified_error.retry_after or COOLDOWN_RATE_LIMIT_DEFAULT
                 model_cooldowns[model] = now_ts + cooldown_seconds
                 lib_logger.info(
                     f"Rate limit on {mask_credential(key)} for model {model}. "
@@ -3143,17 +3000,13 @@ class UsageManager:
             # If we should increment failures, calculate escalating backoff
             if should_increment:
                 failures_data = key_data.setdefault("failures", {})
-                model_failures = failures_data.setdefault(
-                    model, {"consecutive_failures": 0}
-                )
+                model_failures = failures_data.setdefault(model, {"consecutive_failures": 0})
                 model_failures["consecutive_failures"] += 1
                 count = model_failures["consecutive_failures"]
 
                 # If cooldown wasn't set by specific error type, use escalating backoff
                 if cooldown_seconds is None:
-                    cooldown_seconds = COOLDOWN_BACKOFF_TIERS.get(
-                        count, COOLDOWN_BACKOFF_MAX
-                    )
+                    cooldown_seconds = COOLDOWN_BACKOFF_TIERS.get(count, COOLDOWN_BACKOFF_MAX)
                     model_cooldowns[model] = now_ts + cooldown_seconds
                     lib_logger.warning(
                         f"Failure #{count} for key {mask_credential(key)} with model {model}. "
@@ -3313,18 +3166,14 @@ class UsageManager:
                 # This matches how get_max_requests_for_model() calculates it
                 provider = self._get_provider_from_credential(credential)
                 plugin_instance = self._get_provider_instance(provider)
-                if plugin_instance and hasattr(
-                    plugin_instance, "get_max_requests_for_model"
-                ):
+                if plugin_instance and hasattr(plugin_instance, "get_max_requests_for_model"):
                     # Get tier from provider's cache
                     tier = getattr(plugin_instance, "project_tier_cache", {}).get(
                         credential, "standard-tier"
                     )
                     # Strip provider prefix from model if present
                     clean_model = model.split("/")[-1] if "/" in model else model
-                    max_requests = plugin_instance.get_max_requests_for_model(
-                        clean_model, tier
-                    )
+                    max_requests = plugin_instance.get_max_requests_for_model(clean_model, tier)
                     used_requests = int((1.0 - remaining_fraction) * max_requests)
                 else:
                     # Fallback: keep existing count if we can't calculate
@@ -3363,9 +3212,7 @@ class UsageManager:
             # Set cooldowns when quota is exhausted
             model_cooldowns = key_data.setdefault("model_cooldowns", {})
             is_exhausted = remaining_fraction <= 0.0
-            cooldown_set_info = (
-                None  # Will be returned if cooldown was newly set/updated
-            )
+            cooldown_set_info = None  # Will be returned if cooldown was newly set/updated
 
             if is_exhausted and valid_reset_ts:
                 # Check if there was an existing ACTIVE cooldown before we update
@@ -3377,8 +3224,7 @@ class UsageManager:
 
                 # Only update cooldown if not set or differs by more than 5 minutes
                 should_update = (
-                    existing_cooldown is None
-                    or abs(existing_cooldown - reset_timestamp) > 300
+                    existing_cooldown is None or abs(existing_cooldown - reset_timestamp) > 300
                 )
                 if should_update:
                     model_cooldowns[model] = reset_timestamp
@@ -3401,22 +3247,15 @@ class UsageManager:
                         if cooldown_duration > threshold:
                             rotation_mode = self._get_rotation_mode(provider)
                             if self._is_fair_cycle_enabled(provider, rotation_mode):
-                                priority = self._get_credential_priority(
-                                    credential, provider
-                                )
+                                priority = self._get_credential_priority(credential, provider)
                                 tier_key = self._get_tier_key(provider, priority)
-                                tracking_key = self._get_tracking_key(
-                                    credential, model, provider
-                                )
+                                tracking_key = self._get_tracking_key(credential, model, provider)
                                 self._mark_credential_exhausted(
                                     credential, provider, tier_key, tracking_key
                                 )
 
                 # Defensive clamp: ensure request_count doesn't exceed max when exhausted
-                if (
-                    max_requests is not None
-                    and model_data["request_count"] > max_requests
-                ):
+                if max_requests is not None and model_data["request_count"] > max_requests:
                     model_data["request_count"] = max_requests
                     model_data["quota_display"] = f"{max_requests}/{max_requests}"
 
@@ -3444,13 +3283,9 @@ class UsageManager:
                         other_model_data["request_count"] = synced_count
                         if max_requests is not None:
                             other_model_data["quota_max_requests"] = max_requests
-                            other_model_data["quota_display"] = (
-                                f"{synced_count}/{max_requests}"
-                            )
+                            other_model_data["quota_display"] = f"{synced_count}/{max_requests}"
                         # Sync baseline fields
-                        other_model_data["baseline_remaining_fraction"] = (
-                            remaining_fraction
-                        )
+                        other_model_data["baseline_remaining_fraction"] = remaining_fraction
                         other_model_data["baseline_fetched_at"] = now_ts
                         other_model_data["requests_at_baseline"] = synced_count
                         # Sync reset timestamp if valid
@@ -3476,9 +3311,7 @@ class UsageManager:
                                 and other_model_data["request_count"] > max_requests
                             ):
                                 other_model_data["request_count"] = max_requests
-                                other_model_data["quota_display"] = (
-                                    f"{max_requests}/{max_requests}"
-                                )
+                                other_model_data["quota_display"] = f"{max_requests}/{max_requests}"
 
             lib_logger.debug(
                 f"Updated quota baseline for {mask_credential(credential)} model={model}: "
@@ -3700,12 +3533,8 @@ class UsageManager:
                             cred_requests += model_stats.get("success_count", 0)
                             cred_requests += model_stats.get("failure_count", 0)
                         # Token stats - track cached separately
-                        cred_tokens["input_cached"] += model_stats.get(
-                            "prompt_tokens_cached", 0
-                        )
-                        cred_tokens["input_uncached"] += model_stats.get(
-                            "prompt_tokens", 0
-                        )
+                        cred_tokens["input_cached"] += model_stats.get("prompt_tokens_cached", 0)
+                        cred_tokens["input_uncached"] += model_stats.get("prompt_tokens", 0)
                         cred_tokens["output"] += model_stats.get("completion_tokens", 0)
                         cred_cost += model_stats.get("approx_cost", 0.0)
 
@@ -3716,9 +3545,7 @@ class UsageManager:
                     if not isinstance(model_stats, dict):
                         continue
                     cred_requests += model_stats.get("success_count", 0)
-                    cred_tokens["input_cached"] += model_stats.get(
-                        "prompt_tokens_cached", 0
-                    )
+                    cred_tokens["input_cached"] += model_stats.get("prompt_tokens_cached", 0)
                     cred_tokens["input_uncached"] += model_stats.get("prompt_tokens", 0)
                     cred_tokens["output"] += model_stats.get("completion_tokens", 0)
                     cred_cost += model_stats.get("approx_cost", 0.0)
@@ -3730,15 +3557,9 @@ class UsageManager:
                     if not isinstance(model_stats, dict):
                         continue
                     cred_global_requests += model_stats.get("success_count", 0)
-                    cred_global_tokens["input_cached"] += model_stats.get(
-                        "prompt_tokens_cached", 0
-                    )
-                    cred_global_tokens["input_uncached"] += model_stats.get(
-                        "prompt_tokens", 0
-                    )
-                    cred_global_tokens["output"] += model_stats.get(
-                        "completion_tokens", 0
-                    )
+                    cred_global_tokens["input_cached"] += model_stats.get("prompt_tokens_cached", 0)
+                    cred_global_tokens["input_uncached"] += model_stats.get("prompt_tokens", 0)
+                    cred_global_tokens["output"] += model_stats.get("completion_tokens", 0)
                     cred_global_cost += model_stats.get("approx_cost", 0.0)
 
                 # Add current period stats to global totals
@@ -3775,14 +3596,11 @@ class UsageManager:
                 if include_global:
                     # Calculate global cache percentage
                     global_total_input = (
-                        cred_global_tokens["input_cached"]
-                        + cred_global_tokens["input_uncached"]
+                        cred_global_tokens["input_cached"] + cred_global_tokens["input_uncached"]
                     )
                     global_cache_pct = (
                         round(
-                            cred_global_tokens["input_cached"]
-                            / global_total_input
-                            * 100,
+                            cred_global_tokens["input_cached"] / global_total_input * 100,
                             1,
                         )
                         if global_total_input > 0
@@ -3797,9 +3615,7 @@ class UsageManager:
                             "input_cache_pct": global_cache_pct,
                             "output": cred_global_tokens["output"],
                         },
-                        "approx_cost": cred_global_cost
-                        if cred_global_cost > 0
-                        else None,
+                        "approx_cost": cred_global_cost if cred_global_cost > 0 else None,
                     }
 
                 # Add model-specific data for providers with per-model tracking
@@ -3815,12 +3631,8 @@ class UsageManager:
                             "success_count": model_stats.get("success_count", 0),
                             "failure_count": model_stats.get("failure_count", 0),
                             "prompt_tokens": model_stats.get("prompt_tokens", 0),
-                            "prompt_tokens_cached": model_stats.get(
-                                "prompt_tokens_cached", 0
-                            ),
-                            "completion_tokens": model_stats.get(
-                                "completion_tokens", 0
-                            ),
+                            "prompt_tokens_cached": model_stats.get("prompt_tokens_cached", 0),
+                            "completion_tokens": model_stats.get("completion_tokens", 0),
                             "approx_cost": model_stats.get("approx_cost", 0.0),
                             "window_start_ts": model_stats.get("window_start_ts"),
                             "quota_reset_ts": model_stats.get("quota_reset_ts"),
@@ -3828,9 +3640,7 @@ class UsageManager:
                             "baseline_remaining_fraction": model_stats.get(
                                 "baseline_remaining_fraction"
                             ),
-                            "baseline_fetched_at": model_stats.get(
-                                "baseline_fetched_at"
-                            ),
+                            "baseline_fetched_at": model_stats.get("baseline_fetched_at"),
                             "quota_max_requests": model_stats.get("quota_max_requests"),
                             "quota_display": model_stats.get("quota_display"),
                         }
@@ -3847,22 +3657,19 @@ class UsageManager:
 
                 # Aggregate to global provider totals
                 global_providers[provider]["total_requests"] += cred_global_requests
-                global_providers[provider]["tokens"]["input_cached"] += (
-                    cred_global_tokens["input_cached"]
-                )
-                global_providers[provider]["tokens"]["input_uncached"] += (
-                    cred_global_tokens["input_uncached"]
-                )
-                global_providers[provider]["tokens"]["output"] += cred_global_tokens[
-                    "output"
+                global_providers[provider]["tokens"]["input_cached"] += cred_global_tokens[
+                    "input_cached"
                 ]
+                global_providers[provider]["tokens"]["input_uncached"] += cred_global_tokens[
+                    "input_uncached"
+                ]
+                global_providers[provider]["tokens"]["output"] += cred_global_tokens["output"]
                 global_providers[provider]["approx_cost"] += cred_global_cost
 
         # Calculate cache percentages for each provider
         for provider, prov_stats in providers.items():
             total_input = (
-                prov_stats["tokens"]["input_cached"]
-                + prov_stats["tokens"]["input_uncached"]
+                prov_stats["tokens"]["input_cached"] + prov_stats["tokens"]["input_uncached"]
             )
             if total_input > 0:
                 prov_stats["tokens"]["input_cache_pct"] = round(
@@ -3875,9 +3682,7 @@ class UsageManager:
             # Calculate global cache percentages
             if include_global and provider in global_providers:
                 gp = global_providers[provider]
-                global_total = (
-                    gp["tokens"]["input_cached"] + gp["tokens"]["input_uncached"]
-                )
+                global_total = gp["tokens"]["input_cached"] + gp["tokens"]["input_uncached"]
                 if global_total > 0:
                     gp["tokens"]["input_cache_pct"] = round(
                         gp["tokens"]["input_cached"] / global_total * 100, 1
@@ -3891,19 +3696,13 @@ class UsageManager:
         active_creds = sum(p["active_count"] for p in providers.values())
         exhausted_creds = sum(p["exhausted_count"] for p in providers.values())
         total_requests = sum(p["total_requests"] for p in providers.values())
-        total_input_cached = sum(
-            p["tokens"]["input_cached"] for p in providers.values()
-        )
-        total_input_uncached = sum(
-            p["tokens"]["input_uncached"] for p in providers.values()
-        )
+        total_input_cached = sum(p["tokens"]["input_cached"] for p in providers.values())
+        total_input_uncached = sum(p["tokens"]["input_uncached"] for p in providers.values())
         total_output = sum(p["tokens"]["output"] for p in providers.values())
         total_cost = sum(p["approx_cost"] or 0 for p in providers.values())
 
         total_input = total_input_cached + total_input_uncached
-        input_cache_pct = (
-            round(total_input_cached / total_input * 100, 1) if total_input > 0 else 0
-        )
+        input_cache_pct = round(total_input_cached / total_input * 100, 1) if total_input > 0 else 0
 
         result = {
             "providers": providers,
@@ -3927,21 +3726,15 @@ class UsageManager:
 
         # Build global summary
         if include_global:
-            global_total_requests = sum(
-                gp["total_requests"] for gp in global_providers.values()
-            )
+            global_total_requests = sum(gp["total_requests"] for gp in global_providers.values())
             global_total_input_cached = sum(
                 gp["tokens"]["input_cached"] for gp in global_providers.values()
             )
             global_total_input_uncached = sum(
                 gp["tokens"]["input_uncached"] for gp in global_providers.values()
             )
-            global_total_output = sum(
-                gp["tokens"]["output"] for gp in global_providers.values()
-            )
-            global_total_cost = sum(
-                gp["approx_cost"] or 0 for gp in global_providers.values()
-            )
+            global_total_output = sum(gp["tokens"]["output"] for gp in global_providers.values())
+            global_total_cost = sum(gp["approx_cost"] or 0 for gp in global_providers.values())
 
             global_total_input = global_total_input_cached + global_total_input_uncached
             global_input_cache_pct = (
@@ -3960,9 +3753,7 @@ class UsageManager:
                     "input_cache_pct": global_input_cache_pct,
                     "output": global_total_output,
                 },
-                "approx_total_cost": global_total_cost
-                if global_total_cost > 0
-                else None,
+                "approx_total_cost": global_total_cost if global_total_cost > 0 else None,
             }
 
         return result

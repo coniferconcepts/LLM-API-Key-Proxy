@@ -642,6 +642,7 @@ async def lifespan(app: FastAPI):
 
     # Load global timeout from environment (default 30 seconds)
     global_timeout = int(os.getenv("GLOBAL_TIMEOUT", "30"))
+    acquire_timeout = int(os.getenv("ACQUIRE_TIMEOUT", "6"))
 
     # The client now uses the root logger configuration
     client = RotatingClient(
@@ -649,6 +650,7 @@ async def lifespan(app: FastAPI):
         oauth_credentials=oauth_credentials,  # Pass OAuth config
         configure_logging=True,
         global_timeout=global_timeout,
+        acquire_timeout=acquire_timeout,
         litellm_provider_params=litellm_provider_params,
         ignore_models=ignore_models,
         whitelist_models=whitelist_models,
