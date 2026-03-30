@@ -999,8 +999,8 @@ class RotatingClient:
             raise ValueError(
                 f"Provider '{provider}' is not configured for upstream port 8000. "
                 f"Plain alias models like '{model}' belong on the weighted router at port 8001. "
-                f"For port 8000, use a provider-prefixed model such as 'ollama_cloud/{model}', "
-                f"'chutes/...', or 'opencode_go/...'."
+                f"For port 8000, use a provider-prefixed model such as 'ollama_cloud/{model}' "
+                f"or 'chutes/...'."
             )
         raise ValueError(f"No API keys or OAuth credentials configured for provider: {provider}")
 
