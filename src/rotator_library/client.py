@@ -2801,13 +2801,14 @@ class RotatingClient:
             lib_logger.error(
                 f"A streaming request failed because no keys were available within the time budget: {e}"
             )
-            error_data = {
-                "error": {
-                    "message": e.message,
-                    "type": "proxy_busy",
-                    "code": e.code,
-                }
+            error_payload = {
+                "message": e.message,
+                "type": "proxy_busy",
+                "code": e.code,
             }
+            if e.diagnostics:
+                error_payload["diagnostics"] = e.diagnostics
+            error_data = {"error": error_payload}
             yield f"data: {json.dumps(error_data)}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:

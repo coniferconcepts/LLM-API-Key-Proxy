@@ -199,9 +199,8 @@ print("  → Discovering provider plugins...")
 # Provider lazy loading happens during import, so time it here
 _provider_start = time.time()
 with _console.status("[dim]Discovering provider plugins...", spinner="dots"):
-    from rotator_library import (
-        PROVIDER_PLUGINS,
-    )  # This triggers lazy load via __getattr__
+    from rotator_library import PROVIDER_PLUGINS  # This triggers lazy load via __getattr__
+    from rotator_library.error_handler import NoAvailableKeysError
 _provider_time = time.time() - _provider_start
 
 # Get count after import (without timing to avoid double-counting)
@@ -1035,6 +1034,16 @@ async def chat_completions(
         raise HTTPException(status_code=400, detail=f"Invalid Request: {str(e)}")
     except HTTPException:
         raise
+    except NoAvailableKeysError as e:
+        # acquisition-timeout error — diagnostics already attached to the exception
+        error_payload = {
+            "message": e.message,
+            "type": "proxy_busy",
+            "code": e.code,
+        }
+        if e.diagnostics:
+            error_payload["diagnostics"] = e.diagnostics
+        raise HTTPException(status_code=503, detail=error_payload)
     except litellm.AuthenticationError as e:
         raise HTTPException(status_code=401, detail=f"Authentication Error: {str(e)}")
     except litellm.RateLimitError as e:

@@ -131,10 +131,16 @@ class NoAvailableKeysError(Exception):
         code: Machine-readable classification code (e.g., 'acquisition_timeout_exhausted')
     """
 
-    def __init__(self, message: str, code: str = "global_timeout_exhausted"):
+    def __init__(
+        self,
+        message: str,
+        code: str = "global_timeout_exhausted",
+        diagnostics: dict | None = None,
+    ):
         super().__init__(message)
         self.message = message
         self.code = code
+        self.diagnostics = diagnostics or {}
 
     def __str__(self):
         return f"{self.message} (code={self.code})"
@@ -286,6 +292,7 @@ class RequestErrorAccumulator:
         self.timeout_occurred: bool = False
         self.model: str = ""
         self.provider: str = ""
+        self.acquisition_diagnostics: dict | None = None  # Captured from NoAvailableKeysError
 
     def record_error(
         self, credential: str, classified_error: "ClassifiedError", error_message: str
@@ -341,6 +348,11 @@ class RequestErrorAccumulator:
         # Build summary like "3 rate_limit, 1 server_error"
         parts = [f"{count} {err_type}" for err_type, count in counts.items()]
         return ", ".join(parts)
+
+    def record_acquisition_diagnostics(self, diagnostics: dict):
+        """Record diagnostics captured from a NoAvailableKeysError during acquisition."""
+        if not self.acquisition_diagnostics:
+            self.acquisition_diagnostics = diagnostics
 
     def build_client_error_response(self) -> dict:
         """
@@ -408,6 +420,9 @@ class RequestErrorAccumulator:
         # Include summary of normal errors
         if normal_summary:
             response["error"]["details"]["normal_error_summary"] = normal_summary
+
+        if self.acquisition_diagnostics:
+            response["error"]["diagnostics"] = self.acquisition_diagnostics
 
         return response
 

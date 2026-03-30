@@ -2533,9 +2533,37 @@ class UsageManager:
                 # This is not an error, just a timeout for the wait. The main loop will re-evaluate.
                 lib_logger.info("Wait timed out. Re-evaluating for any available key.")
 
+        diagnostics = {
+            "model": model,
+            "configured_max_concurrent": max_concurrent,
+            "available_key_count": len(available_keys),
+            "all_provider_key_count": len(all_provider_credentials or available_keys),
+            "acquisition_deadline_exceeded": True,
+            "key_states": [],
+        }
+
+        snapshot_keys = all_provider_credentials or available_keys
+        for key in snapshot_keys:
+            state = self.key_states.get(key)
+            if not state:
+                continue
+            current_in_use = state["models_in_use"].get(model, 0)
+            cooldown_until = state.get("cooldown_until", 0)
+            diagnostics["key_states"].append(
+                {
+                    "credential": mask_credential(key),
+                    "current_in_use_for_model": current_in_use,
+                    "has_any_in_use": bool(state["models_in_use"]),
+                    "models_in_use": dict(state["models_in_use"]),
+                    "on_cooldown": cooldown_until > time.time(),
+                    "cooldown_until": cooldown_until,
+                }
+            )
+
         raise NoAvailableKeysError(
             f"Could not acquire a key for model {model} within the acquisition time budget.",
             code="acquisition_timeout_exhausted",
+            diagnostics=diagnostics,
         )
 
     async def release_key(self, key: str, model: str):

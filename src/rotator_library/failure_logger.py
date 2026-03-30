@@ -228,11 +228,10 @@ def log_failure(
         "attempt_number": attempt,
         "error_type": type(error).__name__,
         "error_message": full_error_message[:FAILURE_LOG_FULL_MESSAGE_LIMIT],
-        "raw_response": raw_response[:FAILURE_LOG_RAW_RESPONSE_LIMIT]
-        if raw_response
-        else None,
+        "raw_response": raw_response[:FAILURE_LOG_RAW_RESPONSE_LIMIT] if raw_response else None,
         "request_headers": request_headers,
         "error_chain": error_chain if len(error_chain) > 1 else None,
+        "diagnostics": getattr(error, "diagnostics", None) or None,
     }
 
     # 2. Log a concise summary to the main library logger, which will propagate
