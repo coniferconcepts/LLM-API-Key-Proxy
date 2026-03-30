@@ -1,11 +1,13 @@
 # Contributing to LLM-API-Key-Proxy
 
+> Fork note: in the OpenCode router environment, this repo is used as a permanent fork. Prefer `origin` on the Conifer Concepts fork and the `fork/opencode-runtime` branch for local runtime/product work.
+
 Thanks for your interest in contributing! This guide will help you get started.
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/Mirrowel/LLM-API-Key-Proxy.git
+git clone https://github.com/coniferconcepts/LLM-API-Key-Proxy.git
 cd LLM-API-Key-Proxy
 
 # Using uv (recommended)

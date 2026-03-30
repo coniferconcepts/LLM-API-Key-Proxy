@@ -73,7 +73,7 @@ docker compose up -d
 ### From Source
 
 ```bash
-git clone https://github.com/Mirrowel/LLM-API-Key-Proxy.git
+git clone https://github.com/coniferconcepts/LLM-API-Key-Proxy.git
 cd LLM-API-Key-Proxy
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
@@ -1042,3 +1042,4 @@ This project is dual-licensed:
 
 - **Proxy Application** (`src/proxy_app/`) — [MIT License](src/proxy_app/LICENSE)
 - **Resilience Library** (`src/rotator_library/`) — [LGPL-3.0](src/rotator_library/COPYING.LESSER)
+> Fork note for the OpenCode router stack: this checked-in copy is operated as a Conifer Concepts permanent fork. For OpenCode runtime work, prefer the fork remote/branch documented in `FORK_POLICY.md` rather than treating Mirrowel upstream as the active contribution target.
