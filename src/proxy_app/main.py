@@ -84,6 +84,8 @@ def _set_env_default(target: str, *sources: str, default: str | None = None) -> 
 def _normalize_provider_env_aliases() -> None:
     _set_env_default("PROXY_API_KEY", "MIRROWEL_PROXY_KEY")
     _set_env_default("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY")
+    _set_env_default("OPENCODE_GO_API_KEY", "OPENCODE_GO_KEY")
+    _set_env_default("FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY")
     _set_env_default("OPENROUTER_ZDR_API_KEY", "OPENROUTER_ZDR_KEY")
     _set_env_default(
         "OPENROUTER_FREE_API_KEY",
@@ -110,6 +112,12 @@ def _normalize_provider_env_aliases() -> None:
         "OPENROUTER_NON_ZDR_API_KEY",
     )
     _set_env_default("OLLAMA_CLOUD_API_BASE", "OLLAMA_API_BASE", default="https://ollama.com/v1")
+    _set_env_default("OPENCODE_GO_API_BASE", default="https://opencode.ai/zen/go/v1")
+    _set_env_default(
+        "FIREWORKS_AI_API_BASE",
+        "FIREWORKS_API_BASE",
+        default="https://api.fireworks.ai/inference/v1",
+    )
     _set_env_default("FIREWORKS_API_BASE", default="https://api.fireworks.ai/inference/v1")
     _set_env_default("OPENROUTER_ZDR_API_BASE", default="https://openrouter.ai/api/v1")
     _set_env_default(
