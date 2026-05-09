@@ -188,6 +188,7 @@ print("  → Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from rotator_library import RotatingClient
     from rotator_library.credential_manager import CredentialManager
+    from rotator_library.provider_config import discover_api_keys_from_env
     from rotator_library.background_refresher import BackgroundRefresher
     from rotator_library.model_info_service import init_model_info_service
     from proxy_app.request_logger import log_request_to_console
@@ -283,7 +284,6 @@ from rotator_library.anthropic_compat import (
     AnthropicMessagesRequest,
     AnthropicCountTokensRequest,
 )
-
 
 # Calculate total loading time
 _elapsed = time.time() - _start_time
@@ -414,18 +414,10 @@ if ENABLE_RAW_LOGGING:
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 # Note: PROXY_API_KEY validation moved to server startup to allow credential tool to run first
 
-# Discover API keys from environment variables
-api_keys = {}
-for key, value in os.environ.items():
-    if "_API_KEY" in key and key != "PROXY_API_KEY":
-        if key in {"FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY"}:
-            continue
-        provider = key.split("_API_KEY")[0].lower()
-        if key == "FIREWORKS_API_V2_KEY":
-            provider = "fireworks"
-        if provider not in api_keys:
-            api_keys[provider] = []
-        api_keys[provider].append(value)
+# Discover API keys from environment variables.
+# Fireworks V2 is intentionally handled by the shared helper because
+# `FIREWORKS_API_V2_KEY` does not match the generic `_API_KEY` pattern.
+api_keys = discover_api_keys_from_env()
 
 disabled_providers = {
     provider.strip().lower()
@@ -854,9 +846,9 @@ async def streaming_response_wrapper(
                                 if "function" in tc_chunk:
                                     if "name" in tc_chunk["function"]:
                                         if tc_chunk["function"]["name"] is not None:
-                                            aggregated_tool_calls[index]["function"]["name"] += (
-                                                tc_chunk["function"]["name"]
-                                            )
+                                            aggregated_tool_calls[index]["function"][
+                                                "name"
+                                            ] += tc_chunk["function"]["name"]
                                     if "arguments" in tc_chunk["function"]:
                                         if tc_chunk["function"]["arguments"] is not None:
                                             aggregated_tool_calls[index]["function"][

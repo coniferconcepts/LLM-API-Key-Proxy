@@ -609,6 +609,48 @@ def _extract_api_key_prefix(api_key_var: str) -> Optional[str]:
 KNOWN_PROVIDERS: Set[str] = _build_known_providers_set()
 
 
+# Provider-specific env aliases whose shell-facing names intentionally differ
+# from the model prefix used at the Mirrowel/LiteLLM boundary.
+#
+# Fireworks Kimi K2.6 uses a subscription-only key (`FIREWORKS_API_V2_KEY`)
+# and API base (`FIREWORKS_V2_API_BASE`) while requests retain the model
+# prefix `fireworks/...`. Normalize the API-base provider name here so the
+# custom OpenAI-compatible rewrite in `convert_for_litellm()` can apply.
+API_BASE_PROVIDER_ALIASES: Dict[str, str] = {
+    "fireworks_v2": "fireworks",
+}
+
+LEGACY_FIREWORKS_KEY_ENV_VARS = frozenset({"FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY"})
+
+
+def discover_api_keys_from_env(env: Optional[Dict[str, str]] = None) -> Dict[str, list[str]]:
+    """Discover provider API keys from an environment mapping.
+
+    The Fireworks V2 subscription lane intentionally uses
+    ``FIREWORKS_API_V2_KEY``. That name does not contain the conventional
+    ``_API_KEY`` suffix, so it must be handled explicitly. Legacy Fireworks
+    key names are ignored to preserve the Kimi K2.6 cost boundary.
+    """
+    source = os.environ if env is None else env
+    api_keys: Dict[str, list[str]] = {}
+
+    for key, value in source.items():
+        if not value or key == "PROXY_API_KEY":
+            continue
+        if key in LEGACY_FIREWORKS_KEY_ENV_VARS:
+            continue
+        if key == "FIREWORKS_API_V2_KEY":
+            provider = "fireworks"
+        elif "_API_KEY" in key:
+            provider = key.split("_API_KEY")[0].lower()
+        else:
+            continue
+
+        api_keys.setdefault(provider, []).append(value)
+
+    return api_keys
+
+
 def get_provider_ui_config(provider_key: str) -> Dict[str, Any]:
     """Get UI configuration for a provider.
 
@@ -663,6 +705,7 @@ class ProviderConfig:
         for key, value in os.environ.items():
             if key.endswith("_API_BASE") and value:
                 provider = key[:-9].lower()  # Remove _API_BASE
+                provider = API_BASE_PROVIDER_ALIASES.get(provider, provider)
                 self._api_bases[provider] = value.rstrip("/")
 
                 # Track if this is a custom provider (not known to LiteLLM)
@@ -673,9 +716,7 @@ class ProviderConfig:
                         f"(api_base: {value})"
                     )
                 else:
-                    lib_logger.info(
-                        f"Detected API base override for {provider}: {value}"
-                    )
+                    lib_logger.info(f"Detected API base override for {provider}: {value}")
 
     def is_known_provider(self, provider: str) -> bool:
         """Check if provider is known to LiteLLM."""

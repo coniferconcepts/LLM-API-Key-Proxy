@@ -2,20 +2,23 @@
 fastapi==0.135.2
 # ASGI server for running the FastAPI application
 uvicorn==0.42.0
-# For loading environment variables from a .env file
-python-dotenv==1.0.1
+# For loading environment variables from a .env file.
+# LiteLLM 1.83.14 requires python-dotenv 1.2.2.
+python-dotenv==1.2.2
 
 # Installs the local rotator_library in editable mode
 -e src/rotator_library
 
-# A library for calling LLM APIs with a consistent format
-# Pinned to 1.82.0 — versions 1.82.7 and 1.82.8 were compromised (credential theft via litellm_init.pth)
-litellm==1.82.0
+# A library for calling LLM APIs with a consistent format.
+# Avoid 1.82.7 and 1.82.8: those releases were compromised via litellm_init.pth.
+# 1.83.14 is the current PyPI stable used for the post-compromise security lane.
+litellm==1.83.14
 
 filelock==3.16.1
 httpx==0.28.1
 aiofiles==24.1.0
-aiohttp==3.11.11
+# LiteLLM 1.83.14 requires aiohttp 3.13.4.
+aiohttp==3.13.4
 
 colorlog==6.9.0
 
