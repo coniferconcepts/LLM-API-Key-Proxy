@@ -85,7 +85,6 @@ def _normalize_provider_env_aliases() -> None:
     _set_env_default("PROXY_API_KEY", "MIRROWEL_PROXY_KEY")
     _set_env_default("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY")
     _set_env_default("OPENCODE_GO_API_KEY", "OPENCODE_GO_KEY")
-    _set_env_default("FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY")
     _set_env_default("OPENROUTER_ZDR_API_KEY", "OPENROUTER_ZDR_KEY")
     _set_env_default(
         "OPENROUTER_FREE_API_KEY",
@@ -106,7 +105,7 @@ def _normalize_provider_env_aliases() -> None:
     _set_env_default("OLLAMA_CLOUD_API_BASE", "OLLAMA_API_BASE", default="https://ollama.com/v1")
     _set_env_default("OPENCODE_GO_API_BASE", default="https://opencode.ai/zen/go/v1")
     _set_env_default(
-        "FIREWORKS_AI_API_BASE",
+        "FIREWORKS_V2_API_BASE",
         "FIREWORKS_API_BASE",
         default="https://api.fireworks.ai/inference/v1",
     )
@@ -419,7 +418,11 @@ PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 api_keys = {}
 for key, value in os.environ.items():
     if "_API_KEY" in key and key != "PROXY_API_KEY":
+        if key in {"FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY"}:
+            continue
         provider = key.split("_API_KEY")[0].lower()
+        if key == "FIREWORKS_API_V2_KEY":
+            provider = "fireworks"
         if provider not in api_keys:
             api_keys[provider] = []
         api_keys[provider].append(value)

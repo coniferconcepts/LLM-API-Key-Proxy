@@ -340,15 +340,19 @@ SCRAPED_PROVIDERS: dict[str, dict] = {
         "features": ['streaming'],
         "model_count": 9,
     },
-    "fireworks_ai": {
-        "display_name": 'Fireworks AI',
-        "route": 'fireworks_ai/',
-        "api_key_env_vars": ['FIREWORKS_AI_API_KEY'],
-        "api_base_env_vars": ['FIREWORKS_AI_API_BASE'],
+    "fireworks": {
+        "display_name": 'Fireworks AI V2 Kimi K2.6 Subscription',
+        # Keep route empty so `fireworks/...` is treated as a custom
+        # OpenAI-compatible provider and rewritten to `openai/...` with
+        # FIREWORKS_V2_API_BASE. LiteLLM does not accept `fireworks/...` as a
+        # native provider prefix.
+        "route": '',
+        "api_key_env_vars": ['FIREWORKS_API_V2_KEY'],
+        "api_base_env_vars": ['FIREWORKS_V2_API_BASE'],
         "api_base_url": 'https://api.fireworks.ai/inference/v1',
-        "endpoints": ['/chat/completions', '/embeddings', '/completions', '/audio/transcriptions', '/rerank'],
-        "features": ['streaming', 'vision', 'document_inlining', 'reasoning_effort', 'function_calling', 'audio_transcription', 'rerank'],
-        "model_count": 18,
+        "endpoints": ['/chat/completions', '/completions'],
+        "features": ['streaming', 'function_calling'],
+        "model_count": 1,
     },
     "friendliai": {
         "display_name": 'FriendliAI',

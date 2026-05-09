@@ -112,10 +112,10 @@ LITELLM_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "together_ai": {
         "category": "cloud",
     },
-    "fireworks_ai": {
+    "fireworks": {
         "category": "cloud",
         "extra_vars": [
-            ("FIREWORKS_AI_API_BASE", "API Base URL (optional)", None),
+            ("FIREWORKS_V2_API_BASE", "API Base URL (optional)", None),
         ],
     },
     "replicate": {
