@@ -1315,6 +1315,11 @@ def read_root():
     return {"Status": "API Key Proxy is running"}
 
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "mirrowel-upstream"}
+
+
 @app.get("/v1/models")
 async def list_models(
     request: Request,
