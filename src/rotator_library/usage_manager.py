@@ -3,6 +3,7 @@
 
 import json
 import os
+import hashlib
 import time
 import logging
 import asyncio
@@ -33,6 +34,17 @@ lib_logger = logging.getLogger("rotator_library")
 lib_logger.propagate = False
 if not lib_logger.handlers:
     lib_logger.addHandler(logging.NullHandler())
+
+
+def _credential_fingerprint(credential: str) -> str:
+    """Return a stable non-secret identifier for persisted usage state.
+
+    Sixteen SHA-256 hex characters provide a 64-bit identifier. That is not a
+    secret, but it is sufficient to avoid practical collisions for local usage
+    accounting while keeping raw provider credentials out of persisted state.
+    """
+
+    return f"credential_sha256:{hashlib.sha256(credential.encode('utf-8')).hexdigest()[:16]}"
 
 
 class UsageManager:
@@ -1443,8 +1455,33 @@ class UsageManager:
                 # Clean up empty cycle data
                 del self._usage_data["__fair_cycle__"]
 
-            # Hand off to resilient writer - handles retries and disk failures
-            self._state_writer.write(self._usage_data)
+            # Hand off to resilient writer - handles retries and disk failures.
+            # Runtime state keeps raw credential keys in memory so rotation
+            # behavior is unchanged for this process, but disk state must not
+            # persist provider secrets as JSON object keys.
+            self._state_writer.write(self._safe_usage_data_for_persistence(self._usage_data))
+
+    def _safe_usage_data_for_persistence(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Project usage data to a disk-safe shape without raw credential keys."""
+
+        safe: Dict[str, Any] = {}
+        for credential, credential_data in data.items():
+            if credential == "__fair_cycle__":
+                safe[credential] = self._safe_cycle_state_for_persistence(credential_data)
+            else:
+                safe[_credential_fingerprint(str(credential))] = credential_data
+        return safe
+
+    def _safe_cycle_state_for_persistence(self, value: Any) -> Any:
+        """Project fair-cycle credential lists to non-secret fingerprints."""
+
+        if isinstance(value, dict):
+            return {key: self._safe_cycle_state_for_persistence(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [_credential_fingerprint(str(item)) for item in value]
+        if isinstance(value, set):
+            return [_credential_fingerprint(str(item)) for item in sorted(value)]
+        return value
 
     async def _get_usage_data_snapshot(self) -> Dict[str, Any]:
         """

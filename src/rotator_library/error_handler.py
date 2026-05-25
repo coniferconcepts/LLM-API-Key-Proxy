@@ -4,6 +4,7 @@
 import re
 import json
 import os
+import hashlib
 import logging
 from typing import Optional, Dict, Any
 import httpx
@@ -265,13 +266,15 @@ def mask_credential(credential: str) -> str:
     """
     Mask a credential for safe display in logs and error messages.
 
-    - For API keys: shows last 6 characters (e.g., "...xyz123")
+    - For API keys: shows a stable non-secret fingerprint (e.g., "sha256:abcd1234...")
     - For OAuth file paths: shows just the filename (e.g., "antigravity_oauth_1.json")
     """
     if os.path.isfile(credential) or credential.endswith(".json"):
         return os.path.basename(credential)
-    elif len(credential) > 6:
-        return f"...{credential[-6:]}"
+    elif credential.startswith("sha256:"):
+        return credential
+    elif credential:
+        return f"sha256:{hashlib.sha256(credential.encode('utf-8')).hexdigest()[:16]}"
     else:
         return "***"
 
