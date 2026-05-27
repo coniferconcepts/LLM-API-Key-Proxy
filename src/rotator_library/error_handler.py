@@ -25,6 +25,13 @@ from litellm.exceptions import (
 lib_logger = logging.getLogger("rotator_library")
 
 
+def is_model_support_error_message(message: str) -> bool:
+    """Return true for model/request compatibility errors wrapped as auth failures."""
+
+    text = (message or "").lower()
+    return "not supported for format" in text or ("model" in text and "not supported" in text)
+
+
 def _parse_duration_string(duration_str: str) -> Optional[int]:
     """
     Parse duration strings in various formats to total seconds.
@@ -859,6 +866,12 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
         )
 
     if isinstance(e, (AuthenticationError,)):
+        if is_model_support_error_message(str(e)):
+            return ClassifiedError(
+                error_type="invalid_request",
+                original_exception=e,
+                status_code=status_code or 400,
+            )
         return ClassifiedError(
             error_type="authentication",
             original_exception=e,

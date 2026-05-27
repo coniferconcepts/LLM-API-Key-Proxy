@@ -52,6 +52,32 @@ def test_provider_config_does_not_read_legacy_fireworks_keys(monkeypatch):
     assert result["api_key"] != os.environ["FIREWORKS_AI_API_KEY"]
 
 
+def test_opencode_go_messages_uses_anthropic_provider_with_unsuffixed_base(monkeypatch):
+    monkeypatch.setenv("OPENCODE_GO_MESSAGES_API_BASE", "https://opencode.ai/zen/go")
+
+    config = ProviderConfig()
+
+    result = config.convert_for_litellm(
+        model="opencode_go_messages/qwen3.7-max",
+        api_key="go-key",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert result["model"] == "anthropic/qwen3.7-max"
+    assert result["api_base"] == "https://opencode.ai/zen/go"
+    assert result["custom_llm_provider"] == "anthropic"
+
+
+def test_opencode_go_messages_strips_v1_base_for_litellm_anthropic(monkeypatch):
+    monkeypatch.setenv("OPENCODE_GO_MESSAGES_API_BASE", "https://opencode.ai/zen/go/v1")
+
+    config = ProviderConfig()
+
+    result = config.convert_for_litellm(model="opencode_go_messages/qwen3.7-max")
+
+    assert result["api_base"] == "https://opencode.ai/zen/go"
+
+
 def test_discover_api_keys_maps_fireworks_v2_key_to_fireworks_provider():
     api_keys = discover_api_keys_from_env(
         {

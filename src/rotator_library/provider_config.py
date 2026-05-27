@@ -620,6 +620,10 @@ API_BASE_PROVIDER_ALIASES: Dict[str, str] = {
     "fireworks_v2": "fireworks",
 }
 
+ANTHROPIC_COMPATIBLE_CUSTOM_PROVIDERS: Set[str] = {
+    "opencode_go_messages",
+}
+
 LEGACY_FIREWORKS_KEY_ENV_VARS = frozenset({"FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY"})
 
 
@@ -706,6 +710,8 @@ class ProviderConfig:
             if key.endswith("_API_BASE") and value:
                 provider = key[:-9].lower()  # Remove _API_BASE
                 provider = API_BASE_PROVIDER_ALIASES.get(provider, provider)
+                if provider in ANTHROPIC_COMPATIBLE_CUSTOM_PROVIDERS and value.rstrip("/").endswith("/v1"):
+                    value = value.rstrip("/")[:-3]
                 self._api_bases[provider] = value.rstrip("/")
 
                 # Track if this is a custom provider (not known to LiteLLM)
@@ -769,6 +775,16 @@ class ProviderConfig:
             kwargs["api_base"] = api_base
             lib_logger.debug(
                 f"Applying api_base override for known provider {provider}: {api_base}"
+            )
+        elif provider in ANTHROPIC_COMPATIBLE_CUSTOM_PROVIDERS:
+            # Custom provider - route through Anthropic-compatible /messages endpoint.
+            model_name = model.split("/", 1)[1] if "/" in model else model
+            kwargs["model"] = f"anthropic/{model_name}"
+            kwargs["api_base"] = api_base
+            kwargs["custom_llm_provider"] = "anthropic"
+            lib_logger.debug(
+                f"Routing custom provider {provider} through anthropic: "
+                f"model={kwargs['model']}, api_base={api_base}"
             )
         else:
             # Custom provider - route through OpenAI-compatible endpoint
