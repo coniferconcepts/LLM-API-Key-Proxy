@@ -33,8 +33,10 @@ parser.add_argument(
 )
 args, _ = parser.parse_known_args()
 
-# Add the 'src' directory to the Python path
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+_LOCAL_SRC_PATH = str(Path(__file__).resolve().parent.parent)
+if _LOCAL_SRC_PATH in sys.path:
+    sys.path.remove(_LOCAL_SRC_PATH)
+sys.path.insert(0, _LOCAL_SRC_PATH)
 
 # Check if we should launch TUI (no arguments = TUI mode)
 if len(sys.argv) == 1:
@@ -58,7 +60,7 @@ if args.add_credential:
 _start_time = time.time()
 
 # Load all .env files from root folder (main .env first, then any additional *.env files)
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 from glob import glob
 
 # Get the application root directory (EXE dir if frozen, else CWD)
@@ -81,9 +83,61 @@ def _set_env_default(target: str, *sources: str, default: str | None = None) -> 
         os.environ[target] = default
 
 
+def _set_numbered_env_defaults(target_base: str, *source_bases: str) -> None:
+    for source_base in source_bases:
+        prefix = f"{source_base}_"
+        for key, value in list(os.environ.items()):
+            if not value or not key.startswith(prefix):
+                continue
+            suffix = key.removeprefix(prefix)
+            if not suffix.isdigit():
+                continue
+            target = f"{target_base}_{suffix}"
+            if not os.getenv(target):
+                os.environ[target] = value
+
+
+def _load_durable_env_values(env_file: Path) -> dict[str, str | None]:
+    return dict(dotenv_values(env_file)) if env_file.exists() else {}
+
+
+def _apply_durable_disabled_providers(durable_values: dict[str, str | None]) -> None:
+    if "DISABLED_PROVIDERS" not in durable_values:
+        os.environ.pop("DISABLED_PROVIDERS", None)
+        return
+    value = durable_values.get("DISABLED_PROVIDERS") or ""
+    if value:
+        os.environ["DISABLED_PROVIDERS"] = value
+    else:
+        os.environ.pop("DISABLED_PROVIDERS", None)
+
+
+def _apply_durable_ollama_aliases(durable_values: dict[str, str | None]) -> None:
+    if "OLLAMA_CLOUD_API_KEY" not in durable_values and durable_values.get("OLLAMA_API_KEY"):
+        os.environ["OLLAMA_CLOUD_API_KEY"] = durable_values["OLLAMA_API_KEY"] or ""
+    for key, value in durable_values.items():
+        if not value or not key.startswith("OLLAMA_API_KEY_"):
+            continue
+        suffix = key.removeprefix("OLLAMA_API_KEY_")
+        if not suffix.isdigit():
+            continue
+        target = f"OLLAMA_CLOUD_API_KEY_{suffix}"
+        if target not in durable_values:
+            os.environ[target] = value
+
+
+def _load_router_env(env_file: Path) -> None:
+    load_dotenv(env_file, override=True)
+    durable_values = _load_durable_env_values(env_file)
+    _apply_durable_disabled_providers(durable_values)
+    _apply_durable_ollama_aliases(durable_values)
+    _normalize_provider_env_aliases()
+
+
 def _normalize_provider_env_aliases() -> None:
     _set_env_default("PROXY_API_KEY", "MIRROWEL_PROXY_KEY")
     _set_env_default("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY")
+    _set_numbered_env_defaults("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY")
     _set_env_default("OPENCODE_GO_API_KEY", "OPENCODE_GO_KEY")
     _set_env_default("OPENCODE_GO_MESSAGES_API_KEY", "OPENCODE_GO_API_KEY", "OPENCODE_GO_KEY")
     _set_env_default("OPENROUTER_ZDR_API_KEY", "OPENROUTER_ZDR_KEY")
@@ -126,7 +180,8 @@ def _normalize_provider_env_aliases() -> None:
 
 
 # Load main .env first
-load_dotenv(_root_dir / ".env")
+_main_env_file = _root_dir / ".env"
+_load_router_env(_main_env_file)
 
 # Load any additional .env files (e.g., antigravity_all_combined.env, gemini_cli_all_combined.env)
 _env_files_found = list(_root_dir.glob("*.env"))
@@ -134,7 +189,7 @@ for _env_file in sorted(_root_dir.glob("*.env")):
     if _env_file.name != ".env":  # Skip main .env (already loaded)
         load_dotenv(_env_file, override=False)  # Don't override existing values
 
-_normalize_provider_env_aliases()
+_load_router_env(_main_env_file)
 
 # Log discovered .env files for deployment verification
 if _env_files_found:
@@ -144,7 +199,7 @@ if _env_files_found:
 # Get proxy API key for display
 proxy_api_key = os.getenv("PROXY_API_KEY")
 if proxy_api_key:
-    key_display = f"✓ {proxy_api_key}"
+    key_display = "✓ Set"
 else:
     key_display = "✗ Not Set (INSECURE - anyone can access!)"
 
@@ -190,7 +245,10 @@ print("  → Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from rotator_library import RotatingClient
     from rotator_library.credential_manager import CredentialManager
-    from rotator_library.provider_config import discover_api_keys_from_env
+    from rotator_library.provider_config import (
+        discover_api_keys_from_env,
+        normalize_credential_provider,
+    )
     from rotator_library.background_refresher import BackgroundRefresher
     from rotator_library.model_info_service import init_model_info_service
     from proxy_app.request_logger import log_request_to_console
@@ -403,7 +461,7 @@ litellm_logger.propagate = False
 logging.debug(f"Modules loaded in {_elapsed:.2f}s")
 
 # Load environment variables from .env file
-load_dotenv(_root_dir / ".env")
+_load_router_env(_main_env_file)
 
 # --- Configuration ---
 USE_EMBEDDING_BATCHER = False
@@ -422,7 +480,7 @@ PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 api_keys = discover_api_keys_from_env()
 
 disabled_providers = {
-    provider.strip().lower()
+    normalize_credential_provider(provider)
     for provider in os.getenv("DISABLED_PROVIDERS", "").split(",")
     if provider.strip()
 }
@@ -653,11 +711,10 @@ async def lifespan(app: FastAPI):
         max_concurrent_requests_per_key=max_concurrent_requests_per_key,
     )
 
-    # Log loaded credentials summary (compact, always visible for deployment verification)
-    # _api_summary = ', '.join([f"{p}:{len(c)}" for p, c in api_keys.items()]) if api_keys else "none"
-    # _oauth_summary = ', '.join([f"{p}:{len(c)}" for p, c in oauth_credentials.items()]) if oauth_credentials else "none"
-    # _total_summary = ', '.join([f"{p}:{len(c)}" for p, c in client.all_credentials.items()])
-    # print(f"🔑 Credentials loaded: {_total_summary} (API: {_api_summary} | OAuth: {_oauth_summary})")
+    print_startup_credential_summary(
+        client,
+        disabled_provider_count=len(disabled_providers),
+    )
     client.background_refresher.start()  # Start the background task
     app.state.rotating_client = client
 
@@ -923,6 +980,57 @@ async def streaming_response_wrapper(
                 headers=None,  # Headers are not available at this stage
                 body=full_response,
             )
+
+
+def build_credential_summary(
+    client: RotatingClient,
+    disabled_provider_count: int | None = None,
+) -> dict[str, Any]:
+    api_key_provider_counts = {
+        provider: len(credentials)
+        for provider, credentials in sorted(client.api_keys.items())
+        if credentials
+    }
+    oauth_provider_counts = {
+        provider: len(credentials)
+        for provider, credentials in sorted(client.oauth_credentials.items())
+        if credentials
+    }
+    provider_counts = {
+        provider: len(credentials)
+        for provider, credentials in sorted(client.all_credentials.items())
+        if credentials
+    }
+    summary = {
+        "schema_version": "credential_summary.v1",
+        "providers": provider_counts,
+        "api_key_providers": api_key_provider_counts,
+        "oauth_providers": oauth_provider_counts,
+        "total_providers": len(provider_counts),
+        "total_credentials": sum(provider_counts.values()),
+    }
+    if disabled_provider_count is not None:
+        summary["disabled_provider_count"] = disabled_provider_count
+    return summary
+
+
+def print_startup_credential_summary(
+    client: RotatingClient,
+    disabled_provider_count: int = 0,
+) -> None:
+    summary = build_credential_summary(
+        client,
+        disabled_provider_count=disabled_provider_count,
+    )
+    print(f"Credential Summary: {json.dumps(summary, sort_keys=True)}")
+
+
+@app.get("/v1/credential-summary")
+async def credential_summary(
+    _=Depends(verify_api_key),
+    client: RotatingClient = Depends(get_rotating_client),
+):
+    return build_credential_summary(client)
 
 
 @app.post("/v1/chat/completions")

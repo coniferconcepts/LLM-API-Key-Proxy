@@ -626,6 +626,31 @@ ANTHROPIC_COMPATIBLE_CUSTOM_PROVIDERS: Set[str] = {
 
 LEGACY_FIREWORKS_KEY_ENV_VARS = frozenset({"FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY"})
 
+CREDENTIAL_PROVIDER_ALIASES: Dict[str, str] = {
+    "ollama": "ollama_cloud",
+    "openrouter_free": "openrouter_non_zdr",
+}
+
+EXPLICIT_CREDENTIAL_PROVIDER_ENV_ALIASES: Dict[str, str] = {
+    "OPENROUTER_FREE_KEY": "openrouter_non_zdr",
+    "OPENROUTER_NON_ZDR_KEY": "openrouter_non_zdr",
+}
+
+
+def normalize_credential_provider(provider: str) -> str:
+    normalized = provider.strip().lower()
+    return CREDENTIAL_PROVIDER_ALIASES.get(normalized, normalized)
+
+
+def _provider_from_credential_env_key(key: str) -> Optional[str]:
+    if key == "FIREWORKS_API_V2_KEY":
+        return "fireworks"
+    if key in EXPLICIT_CREDENTIAL_PROVIDER_ENV_ALIASES:
+        return EXPLICIT_CREDENTIAL_PROVIDER_ENV_ALIASES[key]
+    if "_API_KEY" in key:
+        return normalize_credential_provider(key.split("_API_KEY")[0])
+    return None
+
 
 def discover_api_keys_from_env(env: Optional[Dict[str, str]] = None) -> Dict[str, list[str]]:
     """Discover provider API keys from an environment mapping.
@@ -643,14 +668,13 @@ def discover_api_keys_from_env(env: Optional[Dict[str, str]] = None) -> Dict[str
             continue
         if key in LEGACY_FIREWORKS_KEY_ENV_VARS:
             continue
-        if key == "FIREWORKS_API_V2_KEY":
-            provider = "fireworks"
-        elif "_API_KEY" in key:
-            provider = key.split("_API_KEY")[0].lower()
-        else:
+        provider = _provider_from_credential_env_key(key)
+        if provider is None:
             continue
 
-        api_keys.setdefault(provider, []).append(value)
+        provider_keys = api_keys.setdefault(provider, [])
+        if value not in provider_keys:
+            provider_keys.append(value)
 
     return api_keys
 
