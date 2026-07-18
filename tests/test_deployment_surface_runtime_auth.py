@@ -65,6 +65,8 @@ def test_cli_public_bind_rejects_approval_without_allowed_hosts(
         "https://proxy.example.com",
         "user@proxy.example.com",
         "proxy.example.com/path",
+        "proxy.example.com.",
+        "*.example.com.",
         "[::1]",
     ],
 )

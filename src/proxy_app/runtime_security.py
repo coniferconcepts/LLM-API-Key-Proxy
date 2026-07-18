@@ -93,11 +93,10 @@ def _valid_allowed_host_pattern(pattern: str) -> bool:
         ip_address(candidate)
         return not pattern.startswith("*.")
     except ValueError:
-        hostname = candidate[:-1] if candidate.endswith(".") else candidate
-        labels = hostname.split(".")
+        labels = candidate.split(".")
         return (
             candidate.isascii()
-            and len(hostname) <= 253
+            and len(candidate) <= 253
             and all(
                 label
                 and len(label) <= 63
