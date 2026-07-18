@@ -8,7 +8,10 @@ Provides a beautiful Rich-based interface for configuration and execution.
 
 import json
 import os
+import secrets
 import sys
+from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from rich.console import Console
 from rich.prompt import IntPrompt, Prompt
@@ -17,6 +20,25 @@ from rich.text import Text
 from dotenv import load_dotenv, set_key
 
 console = Console()
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkBindApproval:
+    allowed_hosts: str
+
+    def apply_to_environment(self) -> None:
+        os.environ["MIRROWEL_ALLOWED_HOSTS"] = self.allowed_hosts
+        os.environ["MIRROWEL_ALLOW_NETWORK_BIND"] = "true"
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip().lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def _get_env_file() -> Path:
@@ -335,6 +357,7 @@ class LauncherTUI:
         self.console = Console()
         self.config = LauncherConfig()
         self.running = True
+        self.network_bind_approval: NetworkBindApproval | None = None
         self.env_file = _get_env_file()
         # Load .env file to ensure environment variables are available
         load_dotenv(dotenv_path=self.env_file, override=True)
@@ -428,10 +451,8 @@ class LauncherTUI:
             f"   Raw I/O Logging:     {'✅ Enabled' if self.config.config.get('enable_raw_logging', False) else '❌ Disabled'}"
         )
 
-        # Show actual API key value
-        proxy_key = os.getenv("PROXY_API_KEY")
-        if proxy_key:
-            self.console.print(f"   Proxy API Key:       {proxy_key}")
+        if os.getenv("PROXY_API_KEY"):
+            self.console.print("   Proxy API Key:       Set")
         else:
             self.console.print("   Proxy API Key:       [red]Not Set (INSECURE!)[/red]")
 
@@ -537,9 +558,7 @@ class LauncherTUI:
                 self.console.print("\n[dim]Operation cancelled.[/dim]")
                 return False
             else:
-                self.console.print(
-                    "[red]Please enter exactly 'Y' or 'N' (case-sensitive)[/red]"
-                )
+                self.console.print("[red]Please enter exactly 'Y' or 'N' (case-sensitive)[/red]")
 
     def show_config_menu(self):
         """Display configuration sub-menu"""
@@ -548,7 +567,8 @@ class LauncherTUI:
 
             self.console.print(
                 Panel.fit(
-                    "[bold cyan]⚙️  Proxy Configuration[/bold cyan]", border_style="cyan"
+                    "[bold cyan]⚙️  Proxy Configuration[/bold cyan]",
+                    border_style="cyan",
                 )
             )
 
@@ -605,9 +625,7 @@ class LauncherTUI:
                 if not confirmed:
                     continue
 
-                new_host = Prompt.ask(
-                    "Enter new host IP", default=self.config.config["host"]
-                )
+                new_host = Prompt.ask("Enter new host IP", default=self.config.config["host"])
                 self.config.update(host=new_host)
                 self.console.print(f"\n[green]✅ Host updated to: {new_host}[/green]")
             elif choice == "2":
@@ -624,14 +642,10 @@ class LauncherTUI:
                 if not confirmed:
                     continue
 
-                new_port = IntPrompt.ask(
-                    "Enter new port", default=self.config.config["port"]
-                )
+                new_port = IntPrompt.ask("Enter new port", default=self.config.config["port"])
                 if 1 <= new_port <= 65535:
                     self.config.update(port=new_port)
-                    self.console.print(
-                        f"\n[green]✅ Port updated to: {new_port}[/green]"
-                    )
+                    self.console.print(f"\n[green]✅ Port updated to: {new_port}[/green]")
                 else:
                     self.console.print("\n[red]❌ Port must be between 1-65535[/red]")
             elif choice == "3":
@@ -652,10 +666,8 @@ class LauncherTUI:
                     continue
 
                 current = os.getenv("PROXY_API_KEY", "")
-                new_key = Prompt.ask(
-                    "Enter new Proxy API Key (leave empty to disable authentication)",
-                    default=current,
-                )
+                key_prompt = "Enter new Proxy API Key (empty disables authentication)"
+                new_key = Prompt.ask(key_prompt, password=True, show_default=False)
 
                 if new_key != current:
                     # If setting to empty, show additional warning
@@ -698,16 +710,13 @@ class LauncherTUI:
                 default_port = 8000
                 default_logging = False
                 default_raw_logging = False
-                default_api_key = "VerysecretKey"
 
                 # Get current values
                 current_host = self.config.config["host"]
                 current_port = self.config.config["port"]
                 current_logging = self.config.config["enable_request_logging"]
-                current_raw_logging = self.config.config.get(
-                    "enable_raw_logging", False
-                )
-                current_api_key = os.getenv("PROXY_API_KEY", "")
+                current_raw_logging = self.config.config.get("enable_raw_logging", False)
+                current_api_key_status = "Set" if os.getenv("PROXY_API_KEY") else "Not Set"
 
                 # Build comparison table
                 warning_lines = [
@@ -717,13 +726,17 @@ class LauncherTUI:
                     "   " + "─" * 62,
                     f"   Host IP              {current_host:20} →  {default_host}",
                     f"   Port                 {str(current_port):20} →  {default_port}",
-                    f"   Transaction Logging  {'Enabled':20} →  Disabled"
-                    if current_logging
-                    else f"   Transaction Logging  {'Disabled':20} →  Disabled",
-                    f"   Raw I/O Logging      {'Enabled':20} →  Disabled"
-                    if current_raw_logging
-                    else f"   Raw I/O Logging      {'Disabled':20} →  Disabled",
-                    f"   Proxy API Key        {current_api_key[:20]:20} →  {default_api_key}",
+                    (
+                        f"   Transaction Logging  {'Enabled':20} →  Disabled"
+                        if current_logging
+                        else f"   Transaction Logging  {'Disabled':20} →  Disabled"
+                    ),
+                    (
+                        f"   Raw I/O Logging      {'Enabled':20} →  Disabled"
+                        if current_raw_logging
+                        else f"   Raw I/O Logging      {'Disabled':20} →  Disabled"
+                    ),
+                    f"   Proxy API Key        {current_api_key_status:20} →  New random key",
                     "",
                     "[bold red]⚠️  This may break applications configured with current settings![/bold red]",
                 ]
@@ -735,22 +748,21 @@ class LauncherTUI:
                     continue
 
                 # Apply defaults
+                new_api_key = secrets.token_urlsafe(32)
                 self.config.update(
                     host=default_host,
                     port=default_port,
                     enable_request_logging=default_logging,
                     enable_raw_logging=default_raw_logging,
                 )
-                LauncherConfig.update_proxy_api_key(default_api_key)
+                LauncherConfig.update_proxy_api_key(new_api_key)
 
-                self.console.print(
-                    "\n[green]✅ All settings have been reset to defaults![/green]"
-                )
+                self.console.print("\n[green]✅ All settings have been reset to defaults![/green]")
                 self.console.print(f"   Host:               {default_host}")
                 self.console.print(f"   Port:               {default_port}")
-                self.console.print(f"   Transaction Logging: Disabled")
-                self.console.print(f"   Raw I/O Logging:    Disabled")
-                self.console.print(f"   Proxy API Key:      {default_api_key}")
+                self.console.print("   Transaction Logging: Disabled")
+                self.console.print("   Raw I/O Logging:    Disabled")
+                self.console.print("   Proxy API Key:      Set (new random key generated)")
             elif choice == "7":
                 break
 
@@ -783,9 +795,7 @@ class LauncherTUI:
                 provider_name = provider.title()
                 parts = []
                 if info["api_keys"] > 0:
-                    parts.append(
-                        f"{info['api_keys']} API key{'s' if info['api_keys'] > 1 else ''}"
-                    )
+                    parts.append(f"{info['api_keys']} API key{'s' if info['api_keys'] > 1 else ''}")
                 if info["oauth"] > 0:
                     parts.append(
                         f"{info['oauth']} OAuth credential{'s' if info['oauth'] > 1 else ''}"
@@ -854,9 +864,7 @@ class LauncherTUI:
         self.console.print()
         self.console.print("[bold]💡 Actions[/bold]")
         self.console.print()
-        self.console.print(
-            "   1. 🔧 Launch Settings Tool      (configure advanced settings)"
-        )
+        self.console.print("   1. 🔧 Launch Settings Tool      (configure advanced settings)")
         self.console.print("   2. ↩️  Back to Main Menu")
 
         self.console.print()
@@ -959,7 +967,8 @@ class LauncherTUI:
 
         self.console.print(
             Panel.fit(
-                "[bold cyan]ℹ️  About LLM API Key Proxy[/bold cyan]", border_style="cyan"
+                "[bold cyan]ℹ️  About LLM API Key Proxy[/bold cyan]",
+                border_style="cyan",
             )
         )
 
@@ -967,9 +976,7 @@ class LauncherTUI:
         self.console.print("[bold]📦 Project Information[/bold]")
         self.console.print("━" * 70)
         self.console.print("   [bold cyan]LLM API Key Proxy[/bold cyan]")
-        self.console.print(
-            "   A lightweight, high-performance proxy server for managing"
-        )
+        self.console.print("   A lightweight, high-performance proxy server for managing")
         self.console.print("   LLM API keys with automatic rotation and OAuth support")
         self.console.print()
         self.console.print(
@@ -985,9 +992,7 @@ class LauncherTUI:
         self.console.print(
             "   • [green]OAuth Support[/green] - Automated OAuth flows for supported providers"
         )
-        self.console.print(
-            "   • [green]Multiple Providers[/green] - Support for 10+ LLM providers"
-        )
+        self.console.print("   • [green]Multiple Providers[/green] - Support for 10+ LLM providers")
         self.console.print(
             "   • [green]Custom Providers[/green] - Easy integration of custom OpenAI-compatible APIs"
         )
@@ -1050,6 +1055,30 @@ class LauncherTUI:
                 )
                 return
 
+        host = self.config.config["host"]
+        if not _is_loopback_host(host):
+            approved = self.confirm_setting_change(
+                "Network Bind",
+                [
+                    f"The proxy will listen on non-loopback host [cyan]{host}[/cyan].",
+                    "Only continue when firewall, TLS, and client authentication are configured.",
+                ],
+            )
+            if not approved:
+                return
+            allowed_hosts = os.getenv("MIRROWEL_ALLOWED_HOSTS", "").strip()
+            if not allowed_hosts:
+                allowed_hosts = Prompt.ask(
+                    "Allowed public Host names/IPs (comma-separated; no schemes or ports)"
+                ).strip()
+            if not allowed_hosts:
+                self.console.print(
+                    "[red]A non-loopback launch requires at least one explicit allowed Host.[/red]"
+                )
+                return
+            self.network_bind_approval = NetworkBindApproval(allowed_hosts=allowed_hosts)
+            self.network_bind_approval.apply_to_environment()
+
         # Clear console and modify sys.argv
         clear_screen()
         self.console.print(
@@ -1065,7 +1094,7 @@ class LauncherTUI:
         sys.argv = [
             "main.py",
             "--host",
-            self.config.config["host"],
+            host,
             "--port",
             str(self.config.config["port"]),
         ]
@@ -1078,7 +1107,8 @@ class LauncherTUI:
         self.running = False
 
 
-def run_launcher_tui():
+def run_launcher_tui() -> NetworkBindApproval | None:
     """Entry point for launcher TUI"""
     tui = LauncherTUI()
     tui.run()
+    return tui.network_bind_approval

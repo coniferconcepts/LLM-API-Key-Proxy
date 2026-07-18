@@ -15,13 +15,7 @@ from litellm.exceptions import APIConnectionError
 from litellm.litellm_core_utils.token_counter import token_counter
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, AsyncGenerator, Optional, Union, Tuple
-
-lib_logger = logging.getLogger("rotator_library")
-# Ensure the logger is configured to propagate to the root logger
-# which is set up in main.py. This allows the main app to control
-# log levels and handlers centrally.
-lib_logger.propagate = False
+from typing import List, Dict, Any, AsyncGenerator, Optional, TYPE_CHECKING, Union, Tuple
 
 from .usage_manager import UsageManager
 from .failure_logger import log_failure, configure_failure_logger
@@ -33,6 +27,7 @@ from .error_handler import (
     should_rotate_on_error,
     should_retry_same_key,
     RequestErrorAccumulator,
+    build_public_stream_error,
     mask_credential,
 )
 from .provider_config import ProviderConfig
@@ -45,7 +40,7 @@ from .background_refresher import BackgroundRefresher
 from .model_definitions import ModelDefinitions
 from .routing_policy import RouteDecision, RoutingPolicy, RoutingPolicyError
 from .transaction_logger import TransactionLogger
-from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir, get_data_file
+from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir
 from .utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings
 from .config import (
     DEFAULT_MAX_RETRIES,
@@ -56,6 +51,15 @@ from .config import (
     DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD,
     DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER,
 )
+
+if TYPE_CHECKING:
+    from .anthropic_compat import AnthropicCountTokensRequest, AnthropicMessagesRequest
+
+lib_logger = logging.getLogger("rotator_library")
+# Ensure the logger is configured to propagate to the root logger
+# which is set up in main.py. This allows the main app to control
+# log levels and handlers centrally.
+lib_logger.propagate = False
 
 
 class StreamedAPIError(Exception):
@@ -127,6 +131,7 @@ class RotatingClient:
         rotation_tolerance: float = DEFAULT_ROTATION_TOLERANCE,
         model_routing_overrides: Optional[Dict[str, Any]] = None,
         data_dir: Optional[Union[str, Path]] = None,
+        trust_env: bool = True,
     ):
         """
         Initialize the RotatingClient with intelligent credential rotation.
@@ -183,6 +188,7 @@ class RotatingClient:
             lib_logger.propagate = False
 
         api_keys = api_keys or {}
+        oauth_credentials_were_provided = oauth_credentials is not None
         oauth_credentials = oauth_credentials or {}
 
         # Filter out providers with empty lists of credentials to ensure validity
@@ -199,7 +205,7 @@ class RotatingClient:
         self.api_keys = api_keys
         # Use provided oauth_credentials directly if available (already discovered by main.py)
         # Only call discover_and_prepare() if no credentials were passed
-        if oauth_credentials:
+        if oauth_credentials_were_provided:
             self.oauth_credentials = oauth_credentials
         else:
             self.credential_manager = CredentialManager(
@@ -333,7 +339,6 @@ class RotatingClient:
 
         for provider in self.all_credentials.keys():
             provider_class = self._provider_plugins.get(provider)
-            rotation_mode = provider_rotation_modes.get(provider, "balanced")
 
             # Fair cycle enabled - check env, then provider default, then derive from rotation mode
             env_key = f"FAIR_CYCLE_{provider.upper()}"
@@ -532,7 +537,7 @@ class RotatingClient:
             custom_caps=custom_caps,
         )
         self._model_list_cache = {}
-        self.http_client = httpx.AsyncClient()
+        self.http_client = httpx.AsyncClient(trust_env=trust_env, follow_redirects=False)
         self.provider_config = ProviderConfig()
         self.cooldown_manager = CooldownManager()
         self.litellm_provider_params = litellm_provider_params or {}
@@ -740,7 +745,6 @@ class RotatingClient:
 
         # For failures, extract key info to make debug logs more readable.
         model = log_data.get("model", "N/A")
-        call_id = log_data.get("litellm_call_id", "N/A")
         error_info = log_data.get("standard_logging_object", {}).get("error_information", {})
         error_class = error_info.get("error_class", "UnknownError")
         error_message = error_info.get("error_message", str(log_data.get("exception", "")))
@@ -1050,16 +1054,15 @@ class RotatingClient:
         try:
             while True:
                 if request and await request.is_disconnected():
-                    lib_logger.info(
-                        f"Client disconnected. Aborting stream for credential {mask_credential(key)}."
-                    )
+                    lib_logger.info("Client disconnected. Aborting upstream stream.")
                     break
 
                 try:
                     chunk = await stream_iterator.__anext__()
                     if json_buffer:
                         lib_logger.warning(
-                            f"Discarding incomplete JSON buffer from previous chunk: {json_buffer}"
+                            "Discarding incomplete JSON buffer from previous chunk bytes=%d",
+                            len(json_buffer),
                         )
                         json_buffer = ""
 
@@ -1116,7 +1119,8 @@ class RotatingClient:
                     stream_completed = True
                     if json_buffer:
                         lib_logger.info(
-                            f"Stream ended with incomplete data in buffer: {json_buffer}"
+                            "Stream ended with incomplete buffered data bytes=%d",
+                            len(json_buffer),
                         )
                     if last_usage:
                         # Create a dummy ModelResponse for recording (only usage matters)
@@ -1176,7 +1180,10 @@ class RotatingClient:
                         parsed_data = json.loads(json_buffer)
 
                         # If parsing succeeds, we have the complete object.
-                        lib_logger.info(f"Successfully reassembled JSON from stream: {json_buffer}")
+                        lib_logger.info(
+                            "Successfully reassembled upstream stream error bytes=%d",
+                            len(json_buffer),
+                        )
 
                         # Wrap the complete error object and raise it. The outer function will decide how to handle it.
                         raise StreamedAPIError(
@@ -1186,7 +1193,8 @@ class RotatingClient:
                     except json.JSONDecodeError:
                         # This is the expected outcome if the JSON in the buffer is not yet complete.
                         lib_logger.info(
-                            f"Buffer still incomplete. Waiting for more chunks: {json_buffer}"
+                            "Upstream stream error buffer remains incomplete bytes=%d",
+                            len(json_buffer),
                         )
                         continue  # Continue to the next loop to get the next chunk.
                     except StreamedAPIError:
@@ -1195,7 +1203,8 @@ class RotatingClient:
                     except Exception as buffer_exc:
                         # If the error was not a JSONDecodeError, it's an unexpected internal error.
                         lib_logger.error(
-                            f"Error during stream buffering logic: {buffer_exc}. Discarding buffer."
+                            "Stream buffering failed error_type=%s; discarding buffer",
+                            type(buffer_exc).__name__,
                         )
                         json_buffer = ""  # Clear the corrupted buffer to prevent further issues.
                         raise buffer_exc
@@ -1207,9 +1216,9 @@ class RotatingClient:
 
         except Exception as e:
             # Catch any other unexpected errors during streaming.
-            lib_logger.error(f"Caught unexpected exception of type: {type(e).__name__}")
             lib_logger.error(
-                f"An unexpected error occurred during the stream for credential {mask_credential(key)}: {e}"
+                "Unexpected upstream stream failure error_type=%s",
+                type(e).__name__,
             )
             # We still need to raise it so the client knows something went wrong.
             raise
@@ -1218,9 +1227,7 @@ class RotatingClient:
             # This block now runs regardless of how the stream terminates (completion, client disconnect, etc.).
             # The primary goal is to ensure usage is always logged internally.
             await self.usage_manager.release_key(key, model)
-            lib_logger.info(
-                f"STREAM FINISHED and lock released for credential {mask_credential(key)}."
-            )
+            lib_logger.info("Upstream stream finished and credential lock released.")
 
             # Only send [DONE] if the stream completed naturally and the client is still there.
             # This prevents sending [DONE] to a disconnected client or after an error.
@@ -1743,9 +1750,11 @@ class RotatingClient:
 
                     if "gemma-3" in model and "messages" in litellm_kwargs:
                         litellm_kwargs["messages"] = [
-                            {"role": "user", "content": m["content"]}
-                            if m.get("role") == "system"
-                            else m
+                            (
+                                {"role": "user", "content": m["content"]}
+                                if m.get("role") == "system"
+                                else m
+                            )
                             for m in litellm_kwargs["messages"]
                         ]
 
@@ -2272,7 +2281,9 @@ class RotatingClient:
                         for attempt in range(self.max_retries):
                             try:
                                 lib_logger.info(
-                                    f"Attempting stream with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
+                                    "Attempting stream attempt=%d/%d",
+                                    attempt + 1,
+                                    self.max_retries,
                                 )
 
                                 if pre_request_callback:
@@ -2285,7 +2296,8 @@ class RotatingClient:
                                             ) from e
                                         else:
                                             lib_logger.warning(
-                                                f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
+                                                "Pre-request callback failed error_type=%s; proceeding.",
+                                                type(e).__name__,
                                             )
 
                                 response = await provider_plugin.acompletion(
@@ -2293,7 +2305,7 @@ class RotatingClient:
                                 )
 
                                 lib_logger.info(
-                                    f"Stream connection established for credential {mask_credential(current_cred)}. Processing response."
+                                    "Stream connection established; processing response."
                                 )
 
                                 key_acquired = False
@@ -2356,7 +2368,9 @@ class RotatingClient:
                                     current_cred, model, classified_error
                                 )
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code}). Rotating."
+                                    "Streaming credential attempt failed category=%s status=%s; rotating.",
+                                    classified_error.error_type,
+                                    classified_error.status_code,
                                 )
                                 break
 
@@ -2389,7 +2403,7 @@ class RotatingClient:
                                         current_cred, classified_error, error_message
                                     )
                                     lib_logger.warning(
-                                        f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
+                                        "Streaming credential exhausted retry budget; rotating."
                                     )
                                     break
 
@@ -2407,7 +2421,7 @@ class RotatingClient:
                                     break
 
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
+                                    "Streaming provider request failed category=server_error; retrying."
                                 )
                                 await asyncio.sleep(wait_time)
                                 continue
@@ -2430,7 +2444,9 @@ class RotatingClient:
                                 )
 
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code})."
+                                    "Streaming credential attempt failed category=%s status=%s",
+                                    classified_error.error_type,
+                                    classified_error.status_code,
                                 )
 
                                 # Check if this error should trigger rotation
@@ -2483,9 +2499,11 @@ class RotatingClient:
 
                     if "gemma-3" in model and "messages" in litellm_kwargs:
                         litellm_kwargs["messages"] = [
-                            {"role": "user", "content": m["content"]}
-                            if m.get("role") == "system"
-                            else m
+                            (
+                                {"role": "user", "content": m["content"]}
+                                if m.get("role") == "system"
+                                else m
+                            )
                             for m in litellm_kwargs["messages"]
                         ]
 
@@ -2502,7 +2520,9 @@ class RotatingClient:
                     for attempt in range(self.max_retries):
                         try:
                             lib_logger.info(
-                                f"Attempting stream with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
+                                "Attempting stream attempt=%d/%d",
+                                attempt + 1,
+                                self.max_retries,
                             )
 
                             if pre_request_callback:
@@ -2515,7 +2535,8 @@ class RotatingClient:
                                         ) from e
                                     else:
                                         lib_logger.warning(
-                                            f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
+                                            "Pre-request callback failed error_type=%s; proceeding.",
+                                            type(e).__name__,
                                         )
 
                             # lib_logger.info(f"DEBUG: litellm.acompletion kwargs: {litellm_kwargs}")
@@ -2529,9 +2550,7 @@ class RotatingClient:
                                 logger_fn=self._litellm_logger_callback,
                             )
 
-                            lib_logger.info(
-                                f"Stream connection established for credential {mask_credential(current_cred)}. Processing response."
-                            )
+                            lib_logger.info("Stream connection established; processing response.")
 
                             key_acquired = False
                             stream_generator = self._safe_streaming_wrapper(
@@ -2611,47 +2630,31 @@ class RotatingClient:
                             ):
                                 consecutive_quota_failures += 1
 
-                                quota_value = "N/A"
-                                quota_id = "N/A"
-                                if "details" in error_details and isinstance(
-                                    error_details.get("details"), list
-                                ):
-                                    for detail in error_details["details"]:
-                                        if isinstance(detail.get("violations"), list):
-                                            for violation in detail["violations"]:
-                                                if "quotaValue" in violation:
-                                                    quota_value = violation["quotaValue"]
-                                                if "quotaId" in violation:
-                                                    quota_id = violation["quotaId"]
-                                                if quota_value != "N/A" and quota_id != "N/A":
-                                                    break
-
                                 await self.usage_manager.record_failure(
                                     current_cred, model, classified_error
                                 )
 
                                 if consecutive_quota_failures >= 3:
-                                    # Fatal: likely input data too large
-                                    client_error_message = (
-                                        f"Request failed after 3 consecutive quota errors (input may be too large). "
-                                        f"Limit: {quota_value} (Quota ID: {quota_id})"
-                                    )
                                     lib_logger.error(
-                                        f"Fatal quota error for {mask_credential(current_cred)}. ID: {quota_id}, Limit: {quota_value}"
+                                        "Streaming request failed category=quota_exceeded "
+                                        "consecutive_failures=3"
                                     )
-                                    yield f"data: {json.dumps({'error': {'message': client_error_message, 'type': 'proxy_fatal_quota_error'}})}\n\n"
+                                    yield f"data: {json.dumps(build_public_stream_error('quota_exceeded'))}\n\n"
                                     yield "data: [DONE]\n\n"
                                     return
                                 else:
                                     lib_logger.warning(
-                                        f"Cred {mask_credential(current_cred)} quota error ({consecutive_quota_failures}/3). Rotating."
+                                        "Streaming credential attempt failed category=quota_exceeded "
+                                        "consecutive_failures=%d/3; rotating.",
+                                        consecutive_quota_failures,
                                     )
                                     break
 
                             else:
                                 consecutive_quota_failures = 0
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} {classified_error.error_type}. Rotating."
+                                    "Streaming credential attempt failed category=%s; rotating.",
+                                    classified_error.error_type,
                                 )
 
                                 if classified_error.error_type == "rate_limit":
@@ -2697,7 +2700,7 @@ class RotatingClient:
 
                             if attempt >= self.max_retries - 1:
                                 lib_logger.warning(
-                                    f"Credential {mask_credential(current_cred)} failed after max retries for model {model} due to a server error. Rotating key silently."
+                                    "Streaming credential exhausted retry budget after server error; rotating."
                                 )
                                 # [MODIFIED] Do not yield to the client here.
                                 break
@@ -2713,7 +2716,8 @@ class RotatingClient:
                                 break
 
                             lib_logger.warning(
-                                f"Credential {mask_credential(current_cred)} encountered a server error for model {model}. Reason: '{error_message_text}'. Retrying in {wait_time:.2f}s."
+                                "Streaming provider request failed category=server_error; "
+                                "retrying within the request budget."
                             )
                             await asyncio.sleep(wait_time)
                             continue
@@ -2737,7 +2741,9 @@ class RotatingClient:
                             )
 
                             lib_logger.warning(
-                                f"Credential {mask_credential(current_cred)} failed with {classified_error.error_type} (Status: {classified_error.status_code}). Error: {error_message_text}."
+                                "Streaming credential attempt failed category=%s status=%s",
+                                classified_error.error_type,
+                                classified_error.status_code,
                             )
 
                             # Handle rate limits with cooldown (exclude quota_exceeded)
@@ -2785,44 +2791,23 @@ class RotatingClient:
                 error_response = error_accumulator.build_client_error_response()
                 error_data = error_response
             else:
-                # Fallback if no errors were recorded (shouldn't happen)
-                final_error_message = (
-                    "Request failed: No available API keys after rotation or timeout."
-                )
-                if last_exception:
-                    final_error_message = f"Request failed. Last error: {str(last_exception)}"
-                error_data = {"error": {"message": final_error_message, "type": "proxy_error"}}
-                lib_logger.error(final_error_message)
+                error_data = build_public_stream_error("internal_error")
+                lib_logger.error("Streaming request failed category=internal_error")
 
             yield f"data: {json.dumps(error_data)}\n\n"
             yield "data: [DONE]\n\n"
 
-        except NoAvailableKeysError as e:
-            lib_logger.error(
-                f"A streaming request failed because no keys were available within the time budget: {e}"
-            )
-            error_payload = {
-                "message": e.message,
-                "type": "proxy_busy",
-                "code": e.code,
-            }
-            if e.diagnostics:
-                error_payload["diagnostics"] = e.diagnostics
-            error_data = {"error": error_payload}
+        except NoAvailableKeysError:
+            lib_logger.error("Streaming request failed category=proxy_busy")
+            error_data = build_public_stream_error("proxy_busy")
             yield f"data: {json.dumps(error_data)}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
-            # This will now only catch fatal errors that should be raised, like invalid requests.
             lib_logger.error(
-                f"An unhandled exception occurred in streaming retry logic: {e}",
-                exc_info=True,
+                "Streaming request failed category=internal_error error_type=%s",
+                type(e).__name__,
             )
-            error_data = {
-                "error": {
-                    "message": f"An unexpected error occurred: {str(e)}",
-                    "type": "proxy_internal_error",
-                }
-            }
+            error_data = build_public_stream_error("internal_error")
             yield f"data: {json.dumps(error_data)}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -3359,13 +3344,11 @@ class RotatingClient:
         result = {
             "action": "force_refresh",
             "scope": "credential" if credential else ("provider" if provider else "all"),
-            "provider": provider,
-            "credential": credential,
             "credentials_refreshed": 0,
             "success_count": 0,
             "failed_count": 0,
             "duration_ms": 0,
-            "errors": [],
+            "failure_categories": {},
         }
 
         start_time = time.time()
@@ -3418,17 +3401,25 @@ class RotatingClient:
                     result["credentials_refreshed"] += len(creds_to_refresh)
 
                     # Count failures
-                    for cred_path, data in quota_results.items():
+                    for data in quota_results.values():
                         if data.get("status") != "success":
                             result["failed_count"] += 1
-                            result["errors"].append(
-                                f"{Path(cred_path).name}: {data.get('error', 'Unknown error')}"
+                            categories = result["failure_categories"]
+                            categories["provider_response_error"] = (
+                                categories.get("provider_response_error", 0) + 1
                             )
 
-                except Exception as e:
-                    lib_logger.error(f"Failed to refresh quota for {prov}: {e}")
-                    result["errors"].append(f"{prov}: {str(e)}")
+                except Exception as exc:
+                    error_type = re.sub(r"[^A-Za-z0-9_.-]", "_", type(exc).__name__)[:64]
+                    lib_logger.error(
+                        "Quota refresh failed error_type=%s status=502",
+                        error_type or "Exception",
+                    )
                     result["failed_count"] += len(creds_to_refresh)
+                    categories = result["failure_categories"]
+                    categories["provider_exception"] = categories.get(
+                        "provider_exception", 0
+                    ) + len(creds_to_refresh)
 
         result["duration_ms"] = int((time.time() - start_time) * 1000)
         return result

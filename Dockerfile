@@ -44,6 +44,8 @@ EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app/src
+# Container port publishing requires a non-loopback listener inside the network namespace.
+ENV MIRROWEL_ALLOW_NETWORK_BIND=true
 
 # Default command - runs proxy with the correct PYTHONPATH
-CMD ["python", "src/proxy_app/main.py", "--port", "8000"]
+CMD ["python", "src/proxy_app/main.py", "--host", "0.0.0.0", "--port", "8000"]

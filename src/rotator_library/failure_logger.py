@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 Mirrowel
 
-import logging
 import json
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
+import logging
+import re
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Union
 
-from .error_handler import mask_credential
-from .utils.paths import get_logs_dir
+from .secure_logging import OwnerOnlyRotatingFileHandler
+from .utils.paths import get_logs_dir, secure_logs_dir
 
 # =============================================================================
 # CONFIGURATION DEFAULTS
@@ -22,17 +22,7 @@ FAILURE_LOG_MAX_SIZE: int = 5 * 1024 * 1024
 # Number of backup log files to keep
 FAILURE_LOG_BACKUP_COUNT: int = 2
 
-# Maximum characters per individual error message in the chain
-FAILURE_LOG_ERROR_MESSAGE_LIMIT: int = 2000
-
-# Maximum error chain length to prevent excessive nesting
-FAILURE_LOG_ERROR_CHAIN_LIMIT: int = 5
-
-# Maximum length of full error message in detailed log
-FAILURE_LOG_FULL_MESSAGE_LIMIT: int = 5000
-
-# Maximum length of raw response in detailed log
-FAILURE_LOG_RAW_RESPONSE_LIMIT: int = 10000
+SAFE_ERROR_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
 class JsonFormatter(logging.Formatter):
@@ -59,14 +49,21 @@ def configure_failure_logger(logs_dir: Optional[Union[Path, str]] = None) -> Non
         logs_dir: Path to the logs directory. If None, uses get_logs_dir().
     """
     global _configured_logs_dir, _failure_logger
+    if _failure_logger is not None:
+        _close_handlers(_failure_logger)
     _configured_logs_dir = Path(logs_dir) if logs_dir else None
-    # Reset logger so it gets reconfigured on next use
     _failure_logger = None
+
+
+def _close_handlers(logger: logging.Logger) -> None:
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
 
 
 def _setup_failure_logger(logs_dir: Path) -> logging.Logger:
     """
-    Sets up a dedicated JSON logger for writing detailed failure logs to a file.
+    Sets up a dedicated JSON logger for writing allowlisted failure metadata.
 
     Args:
         logs_dir: Path to the logs directory.
@@ -78,13 +75,12 @@ def _setup_failure_logger(logs_dir: Path) -> logging.Logger:
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-    # Clear existing handlers to prevent duplicates on re-setup
-    logger.handlers.clear()
+    _close_handlers(logger)
 
     try:
-        logs_dir.mkdir(parents=True, exist_ok=True)
+        secure_logs_dir(logs_dir)
 
-        handler = RotatingFileHandler(
+        handler = OwnerOnlyRotatingFileHandler(
             logs_dir / "failures.log",
             maxBytes=FAILURE_LOG_MAX_SIZE,
             backupCount=FAILURE_LOG_BACKUP_COUNT,
@@ -119,53 +115,15 @@ def get_failure_logger() -> logging.Logger:
 main_lib_logger = logging.getLogger("rotator_library")
 
 
-def _extract_response_body(error: Exception) -> str:
-    """
-    Extract the full response body from various error types.
+def _safe_error_type(error: Exception) -> str:
+    error_type = type(error).__name__
+    return error_type if SAFE_ERROR_TYPE.fullmatch(error_type) else "UnknownError"
 
-    Handles:
-    - StreamedAPIError: wraps original exception in .data attribute
-    - httpx.HTTPStatusError: response.text or response.content
-    - litellm exceptions: various response attributes
-    - Other exceptions: str(error)
-    """
-    # Handle StreamedAPIError which wraps the original exception in .data
-    # This is used by our streaming wrapper when catching provider errors
-    if hasattr(error, "data") and error.data is not None:
-        inner = error.data
-        # If data is a dict (parsed JSON error), return it as JSON
-        if isinstance(inner, dict):
-            try:
-                return json.dumps(inner, indent=2)
-            except Exception:
-                return str(inner)
-        # If data is an exception, recurse to extract from it
-        if isinstance(inner, Exception):
-            result = _extract_response_body(inner)
-            if result:
-                return result
 
-    # Try to get response body from httpx errors
-    if hasattr(error, "response") and error.response is not None:
-        response = error.response
-        # Try .text first (decoded)
-        if hasattr(response, "text") and response.text:
-            return response.text
-        # Try .content (bytes)
-        if hasattr(response, "content") and response.content:
-            try:
-                return response.content.decode("utf-8", errors="replace")
-            except Exception:
-                return str(response.content)
-
-    # Check for litellm's body attribute
-    if hasattr(error, "body") and error.body:
-        return str(error.body)
-
-    # Check for message attribute that might contain response
-    if hasattr(error, "message") and error.message:
-        return str(error.message)
-
+def _safe_status_code(error: Exception) -> int | None:
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int) and 400 <= status_code <= 599:
+        return status_code
     return None
 
 
@@ -175,70 +133,31 @@ def log_failure(
     attempt: int,
     error: Exception,
     request_headers: dict,
-    raw_response_text: str = None,
+    raw_response_text: str | None = None,
 ):
     """
-    Logs a detailed failure message to a file and a concise summary to the main logger.
+    Persist safe failure metadata and emit a concise summary.
+
+    Sensitive compatibility inputs are accepted for existing callers but ignored. Only
+    the allowlisted schema fields constructed in this function can reach the log file.
 
     Args:
-        api_key: The API key or credential path that was used
-        model: The model that was requested
+        api_key: Ignored compatibility input; never persisted
+        model: Ignored compatibility input; never persisted
         attempt: The attempt number (1-based)
-        error: The exception that occurred
-        request_headers: Headers from the original request
-        raw_response_text: Optional pre-extracted response body (e.g., from streaming)
+        error: Used only to derive an allowlisted type name and status code
+        request_headers: Ignored compatibility input; never persisted
+        raw_response_text: Ignored compatibility input; never persisted
     """
-    # 1. Log the full, detailed error to the dedicated failures.log file
-    # Prioritize the explicitly passed raw response text, as it may contain
-    # reassembled data from a stream that is not available on the exception object.
-    raw_response = raw_response_text
-    if not raw_response:
-        raw_response = _extract_response_body(error)
-
-    # Get full error message (not truncated)
-    full_error_message = str(error)
-
-    # Also capture any nested/wrapped exception info
-    error_chain = []
-    visited = set()  # Track visited exceptions to detect circular references
-    current_error = error
-    while current_error:
-        # Check for circular references
-        error_id = id(current_error)
-        if error_id in visited:
-            break
-        visited.add(error_id)
-
-        error_chain.append(
-            {
-                "type": type(current_error).__name__,
-                "message": str(current_error)[:FAILURE_LOG_ERROR_MESSAGE_LIMIT],
-            }
-        )
-        current_error = getattr(current_error, "__cause__", None) or getattr(
-            current_error, "__context__", None
-        )
-        if len(error_chain) > FAILURE_LOG_ERROR_CHAIN_LIMIT:
-            break
-
     detailed_log_data = {
+        "schema_version": "failure_log.v2",
         "timestamp": datetime.utcnow().isoformat(),
-        "api_key_ending": mask_credential(api_key),
-        "model": model,
         "attempt_number": attempt,
-        "error_type": type(error).__name__,
-        "error_message": full_error_message[:FAILURE_LOG_FULL_MESSAGE_LIMIT],
-        "raw_response": raw_response[:FAILURE_LOG_RAW_RESPONSE_LIMIT] if raw_response else None,
-        "request_headers": request_headers,
-        "error_chain": error_chain if len(error_chain) > 1 else None,
-        "diagnostics": getattr(error, "diagnostics", None) or None,
+        "error_type": _safe_error_type(error),
+        "status_code": _safe_status_code(error),
     }
 
-    # 2. Log a concise summary to the main library logger, which will propagate
-    summary_message = (
-        f"API call failed for model {model} with key {mask_credential(api_key)}. "
-        f"Error: {type(error).__name__}. See failures.log for details."
-    )
+    summary_message = f"API call failed. Error type: {_safe_error_type(error)}."
 
     # Log to failure logger with resilience - if it fails, just continue
     try:

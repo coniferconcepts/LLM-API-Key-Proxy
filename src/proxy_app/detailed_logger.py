@@ -25,27 +25,14 @@ Directory structure:
 """
 
 import json
+import logging
 import time
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Optional
-import logging
 
-from rotator_library.utils.resilient_io import (
-    safe_write_json,
-    safe_log_write,
-    safe_mkdir,
-)
+from rotator_library.secure_log_domain import OwnerOnlyLogDomain
 from rotator_library.utils.paths import get_logs_dir
-
-
-def _get_raw_io_logs_dir() -> Path:
-    """Get the raw I/O logs directory, creating it if needed."""
-    logs_dir = get_logs_dir()
-    raw_io_dir = logs_dir / "raw_io"
-    raw_io_dir.mkdir(parents=True, exist_ok=True)
-    return raw_io_dir
 
 
 class RawIOLogger:
@@ -69,26 +56,32 @@ class RawIOLogger:
         self.start_time = time.time()
         self.request_id = str(uuid.uuid4())
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_dir = _get_raw_io_logs_dir() / f"{timestamp}_{self.request_id}"
+        request_name = f"{timestamp}_{self.request_id}"
+        logs_dir = get_logs_dir()
+        self.log_dir = logs_dir / "raw_io" / request_name
         self.streaming = False
-        self._dir_available = safe_mkdir(self.log_dir, logging)
+        self._domain = OwnerOnlyLogDomain(
+            root=logs_dir,
+            components=("raw_io", request_name),
+        )
+        try:
+            self._domain.ensure()
+        except OSError:
+            logging.warning("Raw I/O logging is unavailable because its directory is unsafe")
+            self._dir_available = False
+        else:
+            self._dir_available = True
 
     def _write_json(self, filename: str, data: Dict[str, Any]):
         """Helper to write data to a JSON file in the log directory."""
-        if not self._dir_available:
-            # Try to create directory again in case it was recreated
-            self._dir_available = safe_mkdir(self.log_dir, logging)
-            if not self._dir_available:
-                return
-
-        safe_write_json(
-            self.log_dir / filename,
-            data,
-            logging,
-            atomic=False,
-            indent=4,
-            ensure_ascii=False,
-        )
+        try:
+            content = json.dumps(data, indent=4, ensure_ascii=False)
+            self._domain.write_text(filename, content, append=False)
+        except (OSError, TypeError, ValueError):
+            self._dir_available = False
+            logging.warning("Raw I/O artifact was dropped because its path or content is unsafe")
+        else:
+            self._dir_available = True
 
     def log_request(self, headers: Dict[str, Any], body: Dict[str, Any]):
         """Logs the raw incoming request details."""
@@ -103,12 +96,15 @@ class RawIOLogger:
 
     def log_stream_chunk(self, chunk: Dict[str, Any]):
         """Logs an individual chunk from a streaming response to a JSON Lines file."""
-        if not self._dir_available:
-            return
-
-        log_entry = {"timestamp_utc": datetime.utcnow().isoformat(), "chunk": chunk}
-        content = json.dumps(log_entry, ensure_ascii=False) + "\n"
-        safe_log_write(self.log_dir / "streaming_chunks.jsonl", content, logging)
+        try:
+            log_entry = {"timestamp_utc": datetime.utcnow().isoformat(), "chunk": chunk}
+            content = json.dumps(log_entry, ensure_ascii=False) + "\n"
+            self._domain.write_text("streaming_chunks.jsonl", content, append=True)
+        except (OSError, TypeError, ValueError):
+            self._dir_available = False
+            logging.warning("Raw I/O stream chunk was dropped because its path is unsafe")
+        else:
+            self._dir_available = True
 
     def log_final_response(
         self, status_code: int, headers: Optional[Dict[str, Any]], body: Dict[str, Any]
@@ -130,33 +126,37 @@ class RawIOLogger:
 
     def _extract_reasoning(self, response_body: Dict[str, Any]) -> Optional[str]:
         """Recursively searches for and extracts 'reasoning' fields from the response body."""
-        if not isinstance(response_body, dict):
+        reasoning = response_body.get("reasoning")
+        if isinstance(reasoning, str):
+            return reasoning
+
+        choices = response_body.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             return None
-
-        if "reasoning" in response_body:
-            return response_body["reasoning"]
-
-        if "choices" in response_body and response_body["choices"]:
-            message = response_body["choices"][0].get("message", {})
-            if "reasoning" in message:
-                return message["reasoning"]
-            if "reasoning_content" in message:
-                return message["reasoning_content"]
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            return None
+        for field in ("reasoning", "reasoning_content"):
+            reasoning = message.get(field)
+            if isinstance(reasoning, str):
+                return reasoning
 
         return None
 
     def _log_metadata(self, response_data: Dict[str, Any]):
         """Logs a summary of the transaction for quick analysis."""
-        usage = response_data.get("body", {}).get("usage") or {}
-        model = response_data.get("body", {}).get("model", "N/A")
+        body_value = response_data.get("body")
+        body = body_value if isinstance(body_value, dict) else {}
+        usage_value = body.get("usage")
+        usage = usage_value if isinstance(usage_value, dict) else {}
+        model_value = body.get("model")
+        model = model_value if isinstance(model_value, str) else "N/A"
         finish_reason = "N/A"
-        if (
-            "choices" in response_data.get("body", {})
-            and response_data["body"]["choices"]
-        ):
-            finish_reason = response_data["body"]["choices"][0].get(
-                "finish_reason", "N/A"
-            )
+        choices = body.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            finish_value = choices[0].get("finish_reason")
+            if isinstance(finish_value, str):
+                finish_reason = finish_value
 
         metadata = {
             "request_id": self.request_id,
@@ -175,7 +175,7 @@ class RawIOLogger:
             "reasoning_content": None,
         }
 
-        reasoning = self._extract_reasoning(response_data.get("body", {}))
+        reasoning = self._extract_reasoning(body)
         if reasoning:
             metadata["reasoning_found"] = True
             metadata["reasoning_content"] = reasoning

@@ -11,12 +11,17 @@ OpenAI SSE (Server-Sent Events) format to Anthropic's streaming format.
 import json
 import logging
 import uuid
-from typing import AsyncGenerator, Callable, Optional, Awaitable, Any, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Awaitable, Callable, Optional, TYPE_CHECKING
+
+from .stream_errors import safe_stream_error_events
+from ..stream_cleanup import close_stream_with_timeout
+from ..stream_terminal import require_openai_terminal, sse_data_content
 
 if TYPE_CHECKING:
     from ..transaction_logger import TransactionLogger
 
 logger = logging.getLogger("rotator_library.anthropic_compat")
+STREAM_CLEANUP_TIMEOUT_SECONDS = 1.0
 
 
 async def anthropic_streaming_wrapper(
@@ -58,8 +63,8 @@ async def anthropic_streaming_wrapper(
     content_block_started = False
     thinking_block_started = False
     current_block_index = 0
-    tool_calls_by_index = {}  # Track tool calls by their index
-    tool_block_indices = {}  # Track which block index each tool call uses
+    tool_calls_by_index: dict[int, dict[str, Any]] = {}  # Track tool calls by their index
+    tool_block_indices: dict[int, int] = {}  # Track which block index each tool call uses
     input_tokens = 0
     output_tokens = 0
     cached_tokens = 0  # Track cached tokens for proper Anthropic format
@@ -68,15 +73,10 @@ async def anthropic_streaming_wrapper(
     stop_reason_final = "end_turn"  # Track final stop reason for logging
 
     try:
-        async for chunk_str in openai_stream:
-            # Check for client disconnection if callback provided
-            if is_disconnected is not None and await is_disconnected():
-                break
-
-            if not chunk_str.strip() or not chunk_str.startswith("data:"):
+        async for chunk_str in require_openai_terminal(openai_stream, is_disconnected):
+            data_content = sse_data_content(chunk_str)
+            if data_content is None:
                 continue
-
-            data_content = chunk_str[len("data:") :].strip()
             if data_content == "[DONE]":
                 # CRITICAL: Send message_start if we haven't yet (e.g., empty response)
                 # Claude Code and other clients require message_start before message_stop
@@ -367,67 +367,22 @@ async def anthropic_streaming_wrapper(
             # Block closing is handled when we receive [DONE] to avoid
             # premature closes with providers that send finish_reason on each chunk.
 
-    except Exception as e:
-        logger.error(f"Error in Anthropic streaming wrapper: {e}")
-
-        # If we haven't sent message_start yet, send it now so the client can display the error
-        # Claude Code and other clients may ignore events that come before message_start
-        if not message_started:
-            # Build usage with cached tokens properly handled
-            usage_dict = {
-                "input_tokens": input_tokens - cached_tokens,
-                "output_tokens": 0,
-            }
-            if cached_tokens > 0:
-                usage_dict["cache_read_input_tokens"] = cached_tokens
-                usage_dict["cache_creation_input_tokens"] = 0
-
-            message_start = {
-                "type": "message_start",
-                "message": {
-                    "id": request_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [],
-                    "model": original_model,
-                    "stop_reason": None,
-                    "stop_sequence": None,
-                    "usage": usage_dict,
-                },
-            }
-            yield f"event: message_start\ndata: {json.dumps(message_start)}\n\n"
-
-        # Send the error as a text content block so it's visible to the user
-        error_message = f"Error: {str(e)}"
-        error_block_start = {
-            "type": "content_block_start",
-            "index": current_block_index,
-            "content_block": {"type": "text", "text": ""},
-        }
-        yield f"event: content_block_start\ndata: {json.dumps(error_block_start)}\n\n"
-
-        error_block_delta = {
-            "type": "content_block_delta",
-            "index": current_block_index,
-            "delta": {"type": "text_delta", "text": error_message},
-        }
-        yield f"event: content_block_delta\ndata: {json.dumps(error_block_delta)}\n\n"
-
-        yield f'event: content_block_stop\ndata: {{"type": "content_block_stop", "index": {current_block_index}}}\n\n'
-
-        # Build final usage with cached tokens
-        final_usage = {"output_tokens": 0}
-        if cached_tokens > 0:
-            final_usage["cache_read_input_tokens"] = cached_tokens
-            final_usage["cache_creation_input_tokens"] = 0
-
-        # Send message_delta and message_stop to properly close the stream
-        yield f'event: message_delta\ndata: {{"type": "message_delta", "delta": {{"stop_reason": "end_turn", "stop_sequence": null}}, "usage": {json.dumps(final_usage)}}}\n\n'
-        yield 'event: message_stop\ndata: {"type": "message_stop"}\n\n'
-
-        # Also send the formal error event for clients that handle it
-        error_event = {
-            "type": "error",
-            "error": {"type": "api_error", "message": str(e)},
-        }
-        yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
+    except Exception:
+        logger.error("Anthropic upstream stream failed")
+        open_block_indices = set(tool_block_indices.values())
+        if thinking_block_started or content_block_started:
+            open_block_indices.add(current_block_index)
+        for block_index in sorted(open_block_indices):
+            block_stop = {"type": "content_block_stop", "index": block_index}
+            yield f"event: content_block_stop\ndata: {json.dumps(block_stop)}\n\n"
+        for event in safe_stream_error_events():
+            yield event
+    finally:
+        try:
+            cleanup_finished = await close_stream_with_timeout(
+                openai_stream, STREAM_CLEANUP_TIMEOUT_SECONDS
+            )
+            if not cleanup_finished:
+                logger.warning("Anthropic upstream stream cleanup timed out")
+        except Exception:
+            logger.error("Anthropic upstream stream cleanup failed")

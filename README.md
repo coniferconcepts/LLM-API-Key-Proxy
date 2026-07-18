@@ -47,15 +47,23 @@ chmod +x proxy_app
 
 ```bash
 # Pull and run directly
+export MIRROWEL_ALLOWED_HOSTS=127.0.0.1,localhost
 docker run -d \
   --name llm-api-proxy \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
   -v $(pwd)/.env:/app/.env:ro \
   -v $(pwd)/oauth_creds:/app/oauth_creds \
   -v $(pwd)/logs:/app/logs \
   -e SKIP_OAUTH_INIT_CHECK=true \
+  -e MIRROWEL_ALLOWED_HOSTS="$MIRROWEL_ALLOWED_HOSTS" \
   ghcr.io/mirrowel/llm-api-key-proxy:latest
 ```
+
+The container image explicitly sets `MIRROWEL_ALLOW_NETWORK_BIND=true` and binds
+to `0.0.0.0` because Docker port publishing cannot reach a process bound to the
+container's own loopback interface. The example publishes only on host loopback.
+Use `-p 8000:8000` only after configuring the firewall/TLS boundary, a nonempty
+`PROXY_API_KEY`, and `MIRROWEL_ALLOWED_HOSTS` for the public names clients use.
 
 **Using Docker Compose:**
 
@@ -63,6 +71,7 @@ docker run -d \
 # Create your .env file and key_usage.json first, then:
 cp .env.example .env
 touch key_usage.json
+export MIRROWEL_ALLOWED_HOSTS=127.0.0.1,localhost
 docker compose up -d
 ```
 
@@ -81,7 +90,9 @@ pip install -r requirements.txt
 python src/proxy_app/main.py
 ```
 
-> **Tip:** Running with command-line arguments (e.g., `--host 0.0.0.0 --port 8000`) bypasses the TUI and starts the proxy directly.
+> **Tip:** Running with command-line arguments bypasses the TUI. Loopback is the
+> default. A public bind requires explicit approval, for example
+> `MIRROWEL_ALLOW_NETWORK_BIND=true MIRROWEL_ALLOWED_HOSTS=proxy.example.com python src/proxy_app/main.py --host 0.0.0.0 --port 8000`.
 
 ---
 
@@ -465,6 +476,10 @@ The proxy includes a powerful text-based UI for configuration and management.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PROXY_API_KEY` | Authentication key for your proxy | Required |
+| `MIRROWEL_ALLOW_NETWORK_BIND` | Explicit approval for a non-loopback listener | `false` |
+| `MIRROWEL_ALLOWED_HOSTS` | Comma-separated Host names/IPs, without schemes or ports | Loopback hosts |
+| `MIRROWEL_ALLOW_WILDCARD_HOSTS` | Separate approval for wildcard Host patterns | `false` |
+| `MIRROWEL_CORS_ALLOWED_ORIGINS` | Explicit comma-separated browser origins; credentialed wildcard is forbidden | Loopback origins |
 | `OAUTH_REFRESH_INTERVAL` | Token refresh check interval (seconds) | `600` |
 | `SKIP_OAUTH_INIT_CHECK` | Skip interactive OAuth setup on startup | `false` |
 
@@ -843,7 +858,7 @@ Customize OAuth callback ports if defaults conflict:
 python src/proxy_app/main.py [OPTIONS]
 
 Options:
-  --host TEXT                Host to bind (default: 0.0.0.0)
+  --host TEXT                Host to bind (default: 127.0.0.1)
   --port INTEGER             Port to run on (default: 8000)
   --enable-request-logging   Enable detailed per-request logging
   --add-credential           Launch interactive credential setup tool
@@ -854,6 +869,9 @@ Options:
 ```bash
 # Run on custom port
 python src/proxy_app/main.py --host 127.0.0.1 --port 9000
+
+# Public bind: only after firewall, TLS, and client-auth review
+MIRROWEL_ALLOW_NETWORK_BIND=true MIRROWEL_ALLOWED_HOSTS=proxy.example.com python src/proxy_app/main.py --host 0.0.0.0 --port 8000
 
 # Run with logging
 python src/proxy_app/main.py --enable-request-logging
@@ -875,8 +893,21 @@ See the [Deployment Guide](Deployment%20guide.md) for complete instructions.
 2. Create a `.env` file with your credentials
 3. Create a new Web Service pointing to your repo
 4. Set build command: `pip install -r requirements.txt`
-5. Set start command: `uvicorn src.proxy_app.main:app --host 0.0.0.0 --port $PORT`
-6. Upload `.env` as a secret file
+5. Set `MIRROWEL_ALLOW_NETWORK_BIND=true` only after configuring the platform's
+   firewall, TLS, and client-auth boundary.
+6. Set `MIRROWEL_ALLOWED_HOSTS` to the service hostname, without a scheme or port
+   (for example, `proxy.example.com`).
+7. Set start command: `uvicorn src.proxy_app.main:app --host 0.0.0.0 --port $PORT`
+8. Upload `.env` as a secret file
+
+Direct ASGI launch is supported only when the server exposes its bound address in
+the ASGI request scope. Non-loopback requests fail closed unless
+`MIRROWEL_ALLOW_NETWORK_BIND=true` and an explicit `MIRROWEL_ALLOWED_HOSTS`
+hostname/IP list are present. Public mode also requires a nonempty
+`PROXY_API_KEY`; each HTTP or WebSocket request must contain exactly one nonempty
+`Host` header matching that list. Allowed-host entries are hostnames or IPs only,
+without schemes or ports. Wildcards require the separate
+`MIRROWEL_ALLOW_WILDCARD_HOSTS=true` approval and are not recommended.
 
 **OAuth Credentials:**
 Export OAuth credentials to environment variables using the credential tool, then add them to your platform's environment settings.
@@ -898,10 +929,13 @@ nano .env
 # 2. Create key_usage.json file (required before first run)
 touch key_usage.json
 
-# 3. Start the proxy
+# 3. Name the Host headers the proxy may accept
+export MIRROWEL_ALLOWED_HOSTS=127.0.0.1,localhost
+
+# 4. Start the proxy
 docker compose up -d
 
-# 4. Check logs
+# 5. Check logs
 docker compose logs -f
 ```
 
@@ -916,13 +950,14 @@ touch key_usage.json
 docker run -d \
   --name llm-api-proxy \
   --restart unless-stopped \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
   -v $(pwd)/.env:/app/.env:ro \
   -v $(pwd)/oauth_creds:/app/oauth_creds \
   -v $(pwd)/logs:/app/logs \
   -v $(pwd)/key_usage.json:/app/key_usage.json \
   -e SKIP_OAUTH_INIT_CHECK=true \
   -e PYTHONUNBUFFERED=1 \
+  -e MIRROWEL_ALLOWED_HOSTS=127.0.0.1,localhost \
   ghcr.io/mirrowel/llm-api-key-proxy:latest
 ```
 
@@ -991,6 +1026,8 @@ After=network.target
 Type=simple
 WorkingDirectory=/path/to/LLM-API-Key-Proxy
 ExecStart=/path/to/python -m uvicorn src.proxy_app.main:app --host 0.0.0.0 --port 8000
+Environment=MIRROWEL_ALLOW_NETWORK_BIND=true
+Environment=MIRROWEL_ALLOWED_HOSTS=proxy.example.com
 Restart=always
 
 [Install]

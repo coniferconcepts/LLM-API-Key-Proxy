@@ -2,7 +2,6 @@
 # Copyright (c) 2026 Mirrowel
 
 import time
-import uuid
 
 # Phase 1: Minimal imports for arg parsing and TUI
 import asyncio
@@ -11,10 +10,28 @@ from pathlib import Path
 import sys
 import argparse
 import logging
+import secrets
+
+_LOCAL_SRC_PATH = str(Path(__file__).resolve().parent.parent)
+if _LOCAL_SRC_PATH in sys.path:
+    sys.path.remove(_LOCAL_SRC_PATH)
+sys.path.insert(0, _LOCAL_SRC_PATH)
+
+from proxy_app.runtime_security import (
+    RuntimeSecurityConfig,  # noqa: F401 - compatibility export
+    build_allowed_hosts as _build_allowed_hosts,  # noqa: F401 - compatibility export
+    build_cors_allowed_origins as _build_cors_allowed_origins,
+    build_runtime_security_config as _build_runtime_security_config,
+    env_flag_enabled as _env_flag_enabled,
+    is_loopback_bind_host as _is_loopback_bind_host,  # noqa: F401 - compatibility export
+    network_bind_configuration_error as _network_bind_configuration_error,  # noqa: F401 - compatibility export
+    runtime_security_source as _runtime_security_source,  # noqa: F401 - compatibility export
+    validate_bind_host as _validate_bind_host,
+)
 
 # --- Argument Parsing (BEFORE heavy imports) ---
 parser = argparse.ArgumentParser(description="API Key Proxy Server")
-parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind the server to.")
+parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind the server to.")
 parser.add_argument("--port", type=int, default=8000, help="Port to run the server on.")
 parser.add_argument(
     "--enable-request-logging",
@@ -33,17 +50,24 @@ parser.add_argument(
 )
 args, _ = parser.parse_known_args()
 
-_LOCAL_SRC_PATH = str(Path(__file__).resolve().parent.parent)
-if _LOCAL_SRC_PATH in sys.path:
-    sys.path.remove(_LOCAL_SRC_PATH)
-sys.path.insert(0, _LOCAL_SRC_PATH)
+
+_frozen_local_transport_safe_mode: bool | None = None
+
+
+def _local_transport_safe_mode_enabled() -> bool:
+    if _frozen_local_transport_safe_mode is not None:
+        return _frozen_local_transport_safe_mode
+    return _env_flag_enabled("MIRROWEL_LOCAL_TRANSPORT_SAFE_MODE")
+
+
+_tui_network_bind_approval = None
 
 # Check if we should launch TUI (no arguments = TUI mode)
 if len(sys.argv) == 1:
     # TUI MODE - Load ONLY what's needed for the launcher (fast path!)
     from proxy_app.launcher_tui import run_launcher_tui
 
-    run_launcher_tui()
+    _tui_network_bind_approval = run_launcher_tui()
     # Launcher modifies sys.argv and returns, or exits if user chose Exit
     # If we get here, user chose "Run Proxy" and sys.argv is modified
     # Re-parse arguments with modified sys.argv
@@ -60,8 +84,8 @@ if args.add_credential:
 _start_time = time.time()
 
 # Load all .env files from root folder (main .env first, then any additional *.env files)
-from dotenv import load_dotenv, dotenv_values
-from glob import glob
+from dotenv import load_dotenv
+from proxy_app.bootstrap_env import load_router_env as _load_router_env
 
 # Get the application root directory (EXE dir if frozen, else CWD)
 # Inlined here to avoid triggering heavy rotator_library imports before loading screen
@@ -71,125 +95,41 @@ else:
     _root_dir = Path.cwd()
 
 
-def _set_env_default(target: str, *sources: str, default: str | None = None) -> None:
-    if os.getenv(target):
-        return
-    for source in sources:
-        value = os.getenv(source)
-        if value:
-            os.environ[target] = value
-            return
-    if default is not None:
-        os.environ[target] = default
-
-
-def _set_numbered_env_defaults(target_base: str, *source_bases: str) -> None:
-    for source_base in source_bases:
-        prefix = f"{source_base}_"
-        for key, value in list(os.environ.items()):
-            if not value or not key.startswith(prefix):
-                continue
-            suffix = key.removeprefix(prefix)
-            if not suffix.isdigit():
-                continue
-            target = f"{target_base}_{suffix}"
-            if not os.getenv(target):
-                os.environ[target] = value
-
-
-def _load_durable_env_values(env_file: Path) -> dict[str, str | None]:
-    return dict(dotenv_values(env_file)) if env_file.exists() else {}
-
-
-def _apply_durable_disabled_providers(durable_values: dict[str, str | None]) -> None:
-    if "DISABLED_PROVIDERS" not in durable_values:
-        os.environ.pop("DISABLED_PROVIDERS", None)
-        return
-    value = durable_values.get("DISABLED_PROVIDERS") or ""
-    if value:
-        os.environ["DISABLED_PROVIDERS"] = value
-    else:
-        os.environ.pop("DISABLED_PROVIDERS", None)
-
-
-def _apply_durable_ollama_aliases(durable_values: dict[str, str | None]) -> None:
-    if "OLLAMA_CLOUD_API_KEY" not in durable_values and durable_values.get("OLLAMA_API_KEY"):
-        os.environ["OLLAMA_CLOUD_API_KEY"] = durable_values["OLLAMA_API_KEY"] or ""
-    for key, value in durable_values.items():
-        if not value or not key.startswith("OLLAMA_API_KEY_"):
-            continue
-        suffix = key.removeprefix("OLLAMA_API_KEY_")
-        if not suffix.isdigit():
-            continue
-        target = f"OLLAMA_CLOUD_API_KEY_{suffix}"
-        if target not in durable_values:
-            os.environ[target] = value
-
-
-def _load_router_env(env_file: Path) -> None:
-    load_dotenv(env_file, override=True)
-    durable_values = _load_durable_env_values(env_file)
-    _apply_durable_disabled_providers(durable_values)
-    _apply_durable_ollama_aliases(durable_values)
-    _normalize_provider_env_aliases()
-
-
-def _normalize_provider_env_aliases() -> None:
-    _set_env_default("PROXY_API_KEY", "MIRROWEL_PROXY_KEY")
-    _set_env_default("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY")
-    _set_numbered_env_defaults("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY")
-    _set_env_default("OPENCODE_GO_API_KEY", "OPENCODE_GO_KEY")
-    _set_env_default("OPENCODE_GO_MESSAGES_API_KEY", "OPENCODE_GO_API_KEY", "OPENCODE_GO_KEY")
-    _set_env_default("OPENROUTER_ZDR_API_KEY", "OPENROUTER_ZDR_KEY")
-    _set_env_default(
-        "OPENROUTER_FREE_API_KEY",
-        "OPENROUTER_FREE_KEY",
-        "OPENROUTER_NON_ZDR_KEY",
-        "OPENROUTER_NON_ZDR_API_KEY",
-    )
-    _set_env_default(
-        "OPENROUTER_NON_ZDR_API_KEY",
-        "OPENROUTER_FREE_KEY",
-        "OPENROUTER_FREE_API_KEY",
-        "OPENROUTER_NON_ZDR_KEY",
-    )
-    # OPENROUTER_FREE_KEY is the canonical shell-facing value for the non-ZDR lane.
-    # Keep OPENROUTER_NON_ZDR_* as compatibility aliases for runtime consumers.
-    _set_env_default("OPENROUTER_NON_ZDR_KEY", "OPENROUTER_FREE_KEY")
-    _set_env_default("OPENROUTER_FREE_KEY", "OPENROUTER_NON_ZDR_KEY")
-    _set_env_default("OLLAMA_CLOUD_API_BASE", "OLLAMA_API_BASE", default="https://ollama.com/v1")
-    _set_env_default("OPENCODE_GO_API_BASE", default="https://opencode.ai/zen/go/v1")
-    _set_env_default("OPENCODE_GO_MESSAGES_API_BASE", default="https://opencode.ai/zen/go")
-    _set_env_default(
-        "FIREWORKS_V2_API_BASE",
-        "FIREWORKS_API_BASE",
-        default="https://api.fireworks.ai/inference/v1",
-    )
-    _set_env_default("FIREWORKS_API_BASE", default="https://api.fireworks.ai/inference/v1")
-    _set_env_default("OPENROUTER_ZDR_API_BASE", default="https://openrouter.ai/api/v1")
-    _set_env_default(
-        "OPENROUTER_NON_ZDR_API_BASE",
-        "OPENROUTER_FREE_API_BASE",
-        default="https://openrouter.ai/api/v1",
-    )
-    _set_env_default(
-        "OPENROUTER_FREE_API_BASE",
-        "OPENROUTER_NON_ZDR_API_BASE",
-        default="https://openrouter.ai/api/v1",
-    )
+_provider_environment_is_authoritative = bool(
+    os.getenv("OPENCODE_ROUTER_PROVIDER_ENV_PATH", "").strip()
+)
 
 
 # Load main .env first
 _main_env_file = _root_dir / ".env"
-_load_router_env(_main_env_file)
+_load_router_env(_main_env_file, _tui_network_bind_approval)
 
 # Load any additional .env files (e.g., antigravity_all_combined.env, gemini_cli_all_combined.env)
-_env_files_found = list(_root_dir.glob("*.env"))
-for _env_file in sorted(_root_dir.glob("*.env")):
-    if _env_file.name != ".env":  # Skip main .env (already loaded)
-        load_dotenv(_env_file, override=False)  # Don't override existing values
+_env_files_found = [] if _provider_environment_is_authoritative else list(_root_dir.glob("*.env"))
+if not _provider_environment_is_authoritative:
+    for _env_file in sorted(_env_files_found):
+        if _env_file.name != ".env":  # Skip main .env (already loaded)
+            load_dotenv(_env_file, override=False)  # Don't override existing values
 
-_load_router_env(_main_env_file)
+_load_router_env(_main_env_file, _tui_network_bind_approval)
+if _local_transport_safe_mode_enabled():
+    from proxy_app.local_transport_policy import normalize_local_xai_base
+
+    try:
+        os.environ["XAI_OAUTH_API_BASE"] = normalize_local_xai_base(
+            os.environ["XAI_OAUTH_API_BASE"]
+        )
+    except (KeyError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+from proxy_app.local_transport_runtime import LocalTransportRuntimePolicy
+
+try:
+    _local_transport_runtime_policy = LocalTransportRuntimePolicy.from_environment(os.environ)
+except ValueError as exc:
+    raise SystemExit(str(exc)) from exc
+_frozen_local_transport_safe_mode = _local_transport_runtime_policy.enabled
+_runtime_security_config = _build_runtime_security_config()
+args.host = _validate_bind_host(args.host, _runtime_security_config)
 
 # Log discovered .env files for deployment verification
 if _env_files_found:
@@ -206,7 +146,7 @@ else:
 print("━" * 70)
 print(f"Starting proxy on {args.host}:{args.port}")
 print(f"Proxy API Key: {key_display}")
-print(f"GitHub: https://github.com/Mirrowel/LLM-API-Key-Proxy")
+print("GitHub: https://github.com/Mirrowel/LLM-API-Key-Proxy")
 print("━" * 70)
 print("Loading server components...")
 
@@ -219,11 +159,10 @@ _console = Console()
 # Phase 3: Heavy dependencies with granular loading messages
 print("  → Loading FastAPI framework...")
 with _console.status("[dim]Loading FastAPI framework...", spinner="dots"):
-    from contextlib import asynccontextmanager
+    from contextlib import aclosing, asynccontextmanager
     from fastapi import FastAPI, Request, HTTPException, Depends
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse, JSONResponse
-    from fastapi.security import APIKeyHeader
 
 print("  → Loading core dependencies...")
 with _console.status("[dim]Loading core dependencies...", spinner="dots"):
@@ -238,7 +177,11 @@ with _console.status("[dim]Loading core dependencies...", spinner="dots"):
 
 print("  → Loading LiteLLM library...")
 with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
-    import litellm
+    from proxy_app.litellm_loader import load_litellm
+
+    litellm = load_litellm(
+        local_transport_safe_mode=_local_transport_safe_mode_enabled(),
+    )
 
 # Phase 4: Application imports with granular loading messages
 print("  → Initializing proxy core...")
@@ -249,17 +192,41 @@ with _console.status("[dim]Initializing proxy core...", spinner="dots"):
         discover_api_keys_from_env,
         normalize_credential_provider,
     )
-    from rotator_library.background_refresher import BackgroundRefresher
     from rotator_library.model_info_service import init_model_info_service
     from proxy_app.request_logger import log_request_to_console
     from proxy_app.batch_manager import EmbeddingBatcher
+    from proxy_app.request_boundary import BoundedJSONBodyMiddleware
+    from proxy_app.safe_errors import (
+        SafeUnhandledErrorMiddleware,
+        anthropic_error_content,
+        log_safe_exception,
+        public_error_detail,
+    )
+    from proxy_app.anthropic_stream import (
+        bounded_anthropic_sse_response as anthropic_streaming_response_wrapper,
+    )
+    from proxy_app.stream_bounds import (
+        DEFAULT_OPENAI_STREAM_CAPACITY,
+        DEFAULT_OPENAI_STREAM_POLICY,
+        OpenAIStreamPolicy,
+        bounded_sse_stream,
+    )
+    from rotator_library.stream_terminal import require_openai_terminal, sse_data_content
     from proxy_app.detailed_logger import RawIOLogger
+
+OPENAI_STREAM_MAX_BYTES = DEFAULT_OPENAI_STREAM_POLICY.max_bytes
+OPENAI_STREAM_MAX_EVENTS = DEFAULT_OPENAI_STREAM_POLICY.max_events
+OPENAI_STREAM_IDLE_TIMEOUT_SECONDS = DEFAULT_OPENAI_STREAM_POLICY.idle_timeout_seconds
+OPENAI_STREAM_TOTAL_TIMEOUT_SECONDS = DEFAULT_OPENAI_STREAM_POLICY.total_timeout_seconds
+OPENAI_STREAM_CAPACITY = DEFAULT_OPENAI_STREAM_CAPACITY
 
 print("  → Discovering provider plugins...")
 # Provider lazy loading happens during import, so time it here
 _provider_start = time.time()
 with _console.status("[dim]Discovering provider plugins...", spinner="dots"):
-    from rotator_library import PROVIDER_PLUGINS  # This triggers lazy load via __getattr__
+    from rotator_library import (
+        PROVIDER_PLUGINS,
+    )  # This triggers lazy load via __getattr__
     from rotator_library.error_handler import NoAvailableKeysError
 _provider_time = time.time() - _provider_start
 
@@ -361,7 +328,7 @@ _os_module.system("cls" if _os_module.name == "nt" else "clear")
 print("━" * 70)
 print(f"Starting proxy on {args.host}:{args.port}")
 print(f"Proxy API Key: {key_display}")
-print(f"GitHub: https://github.com/Mirrowel/LLM-API-Key-Proxy")
+print("GitHub: https://github.com/Mirrowel/LLM-API-Key-Proxy")
 print("━" * 70)
 print(
     f"✓ Server ready in {_elapsed:.2f}s ({_plugin_count} providers discovered in {_provider_time:.2f}s)"
@@ -372,6 +339,7 @@ print(
 
 # --- Logging Configuration ---
 # Import path utilities here (after loading screen) to avoid triggering heavy imports early
+from rotator_library.secure_logging import OwnerOnlyRotatingFileHandler
 from rotator_library.utils.paths import get_logs_dir, get_data_file
 
 LOG_DIR = get_logs_dir(_root_dir)
@@ -392,14 +360,18 @@ formatter = colorlog.ColoredFormatter(
 console_handler.setFormatter(formatter)
 
 # Configure a file handler for INFO-level logs and higher
-info_file_handler = logging.FileHandler(LOG_DIR / "proxy.log", encoding="utf-8")
+info_file_handler = OwnerOnlyRotatingFileHandler(
+    LOG_DIR / "proxy.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
 info_file_handler.setLevel(logging.INFO)
 info_file_handler.setFormatter(
     logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 )
 
 # Configure a dedicated file handler for all DEBUG-level logs
-debug_file_handler = logging.FileHandler(LOG_DIR / "proxy_debug.log", encoding="utf-8")
+debug_file_handler = OwnerOnlyRotatingFileHandler(
+    LOG_DIR / "proxy_debug.log", maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8"
+)
 debug_file_handler.setLevel(logging.DEBUG)
 debug_file_handler.setFormatter(
     logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -461,7 +433,7 @@ litellm_logger.propagate = False
 logging.debug(f"Modules loaded in {_elapsed:.2f}s")
 
 # Load environment variables from .env file
-_load_router_env(_main_env_file)
+_load_router_env(_main_env_file, _tui_network_bind_approval)
 
 # --- Configuration ---
 USE_EMBEDDING_BATCHER = False
@@ -471,13 +443,12 @@ if ENABLE_REQUEST_LOGGING:
     logging.info("Transaction logging is enabled (library-level with provider correlation).")
 if ENABLE_RAW_LOGGING:
     logging.info("Raw I/O logging is enabled (proxy boundary, unmodified HTTP data).")
-PROXY_API_KEY = os.getenv("PROXY_API_KEY")
-# Note: PROXY_API_KEY validation moved to server startup to allow credential tool to run first
-
 # Discover API keys from environment variables.
 # Fireworks V2 is intentionally handled by the shared helper because
 # `FIREWORKS_API_V2_KEY` does not match the generic `_API_KEY` pattern.
 api_keys = discover_api_keys_from_env()
+if _local_transport_safe_mode_enabled():
+    api_keys = {"xai_oauth": api_keys["xai_oauth"]} if api_keys.get("xai_oauth") else {}
 
 disabled_providers = {
     normalize_credential_provider(provider)
@@ -530,250 +501,88 @@ for key, value in os.environ.items():
 
 
 # --- Lifespan Management ---
+from proxy_app.app_lifecycle import LifecycleDependencies, application_lifespan
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage the RotatingClient's lifecycle with the app's lifespan."""
-    # [MODIFIED] Perform skippable OAuth initialization at startup
-    skip_oauth_init = os.getenv("SKIP_OAUTH_INIT_CHECK", "false").lower() == "true"
-
-    # The CredentialManager now handles all discovery, including .env overrides.
-    # We pass all environment variables to it for this purpose.
-    cred_manager = CredentialManager(dict(os.environ))
-    oauth_credentials = cred_manager.discover_and_prepare()
-
-    if not skip_oauth_init and oauth_credentials:
-        logging.info("Starting OAuth credential validation and deduplication...")
-        processed_emails = {}  # email -> {provider: path}
-        credentials_to_initialize = {}  # provider -> [paths]
-        final_oauth_credentials = {}
-
-        # --- Pass 1: Pre-initialization Scan & Deduplication ---
-        # logging.info("Pass 1: Scanning for existing metadata to find duplicates...")
-        for provider, paths in oauth_credentials.items():
-            if provider not in credentials_to_initialize:
-                credentials_to_initialize[provider] = []
-            for path in paths:
-                # Skip env-based credentials (virtual paths) - they don't have metadata files
-                if path.startswith("env://"):
-                    credentials_to_initialize[provider].append(path)
-                    continue
-
-                try:
-                    with open(path, "r") as f:
-                        data = json.load(f)
-                    metadata = data.get("_proxy_metadata", {})
-                    email = metadata.get("email")
-
-                    if email:
-                        if email not in processed_emails:
-                            processed_emails[email] = {}
-
-                        if provider in processed_emails[email]:
-                            original_path = processed_emails[email][provider]
-                            logging.warning(
-                                f"Duplicate for '{email}' on '{provider}' found in pre-scan: '{Path(path).name}'. Original: '{Path(original_path).name}'. Skipping."
-                            )
-                            continue
-                        else:
-                            processed_emails[email][provider] = path
-
-                    credentials_to_initialize[provider].append(path)
-
-                except (FileNotFoundError, json.JSONDecodeError) as e:
-                    logging.warning(
-                        f"Could not pre-read metadata from '{path}': {e}. Will process during initialization."
-                    )
-                    credentials_to_initialize[provider].append(path)
-
-        # --- Pass 2: Parallel Initialization of Filtered Credentials ---
-        # logging.info("Pass 2: Initializing unique credentials and performing final check...")
-        async def process_credential(provider: str, path: str, provider_instance):
-            """Process a single credential: initialize and fetch user info."""
-            try:
-                await provider_instance.initialize_token(path)
-
-                if not hasattr(provider_instance, "get_user_info"):
-                    return (provider, path, None, None)
-
-                user_info = await provider_instance.get_user_info(path)
-                email = user_info.get("email")
-                return (provider, path, email, None)
-
-            except Exception as e:
-                logging.error(f"Failed to process OAuth token for {provider} at '{path}': {e}")
-                return (provider, path, None, e)
-
-        # Collect all tasks for parallel execution
-        tasks = []
-        for provider, paths in credentials_to_initialize.items():
-            if not paths:
-                continue
-
-            provider_plugin_class = PROVIDER_PLUGINS.get(provider)
-            if not provider_plugin_class:
-                continue
-
-            provider_instance = provider_plugin_class()
-
-            for path in paths:
-                tasks.append(process_credential(provider, path, provider_instance))
-
-        # Execute all credential processing tasks in parallel
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # --- Pass 3: Sequential Deduplication and Final Assembly ---
-        for result in results:
-            # Handle exceptions from gather
-            if isinstance(result, Exception):
-                logging.error(f"Credential processing raised exception: {result}")
-                continue
-
-            provider, path, email, error = result
-
-            # Skip if there was an error
-            if error:
-                continue
-
-            # If provider doesn't support get_user_info, add directly
-            if email is None:
-                if provider not in final_oauth_credentials:
-                    final_oauth_credentials[provider] = []
-                final_oauth_credentials[provider].append(path)
-                continue
-
-            # Handle empty email
-            if not email:
-                logging.warning(f"Could not retrieve email for '{path}'. Treating as unique.")
-                if provider not in final_oauth_credentials:
-                    final_oauth_credentials[provider] = []
-                final_oauth_credentials[provider].append(path)
-                continue
-
-            # Deduplication check
-            if email not in processed_emails:
-                processed_emails[email] = {}
-
-            if provider in processed_emails[email] and processed_emails[email][provider] != path:
-                original_path = processed_emails[email][provider]
-                logging.warning(
-                    f"Duplicate for '{email}' on '{provider}' found post-init: '{Path(path).name}'. Original: '{Path(original_path).name}'. Skipping."
-                )
-                continue
-            else:
-                processed_emails[email][provider] = path
-                if provider not in final_oauth_credentials:
-                    final_oauth_credentials[provider] = []
-                final_oauth_credentials[provider].append(path)
-
-                # Update metadata (skip for env-based credentials - they don't have files)
-                if not path.startswith("env://"):
-                    try:
-                        with open(path, "r+") as f:
-                            data = json.load(f)
-                            metadata = data.get("_proxy_metadata", {})
-                            metadata["email"] = email
-                            metadata["last_check_timestamp"] = time.time()
-                            data["_proxy_metadata"] = metadata
-                            f.seek(0)
-                            json.dump(data, f, indent=2)
-                            f.truncate()
-                    except Exception as e:
-                        logging.error(f"Failed to update metadata for '{path}': {e}")
-
-        logging.info("OAuth credential processing complete.")
-        oauth_credentials = final_oauth_credentials
-
-    if disabled_providers:
-        oauth_credentials = {
-            provider: paths
-            for provider, paths in oauth_credentials.items()
-            if provider not in disabled_providers
-        }
-
-    # [NEW] Load provider-specific params
-    litellm_provider_params = {"gemini_cli": {"project_id": os.getenv("GEMINI_CLI_PROJECT_ID")}}
-
-    # Load global timeout from environment (default 30 seconds)
-    global_timeout = int(os.getenv("GLOBAL_TIMEOUT", "30"))
-    acquire_timeout = int(os.getenv("ACQUIRE_TIMEOUT", "10"))
-
-    # The client now uses the root logger configuration
-    client = RotatingClient(
+    dependencies = LifecycleDependencies(
+        credential_manager_factory=CredentialManager,
+        rotating_client_factory=RotatingClient,
+        provider_plugins=PROVIDER_PLUGINS,
+        init_model_info_service=init_model_info_service,
+        embedding_batcher_factory=EmbeddingBatcher,
+        litellm=litellm,
+        log_safe_exception=log_safe_exception,
+        print_startup_credential_summary=print_startup_credential_summary,
+        local_transport_safe_mode_enabled=_local_transport_safe_mode_enabled,
         api_keys=api_keys,
-        oauth_credentials=oauth_credentials,  # Pass OAuth config
-        configure_logging=True,
-        global_timeout=global_timeout,
-        acquire_timeout=acquire_timeout,
-        litellm_provider_params=litellm_provider_params,
+        disabled_providers=frozenset(disabled_providers),
         ignore_models=ignore_models,
         whitelist_models=whitelist_models,
-        enable_request_logging=ENABLE_REQUEST_LOGGING,
         max_concurrent_requests_per_key=max_concurrent_requests_per_key,
+        enable_request_logging=ENABLE_REQUEST_LOGGING,
+        use_embedding_batcher=USE_EMBEDDING_BATCHER,
     )
-
-    print_startup_credential_summary(
-        client,
-        disabled_provider_count=len(disabled_providers),
-    )
-    client.background_refresher.start()  # Start the background task
-    app.state.rotating_client = client
-
-    # Warn if no provider credentials are configured
-    if not client.all_credentials:
-        logging.warning("=" * 70)
-        logging.warning("⚠️  NO PROVIDER CREDENTIALS CONFIGURED")
-        logging.warning("The proxy is running but cannot serve any LLM requests.")
-        logging.warning("Launch the credential tool to add API keys or OAuth credentials.")
-        logging.warning("  • Executable: Run with --add-credential flag")
-        logging.warning("  • Source: python src/proxy_app/main.py --add-credential")
-        logging.warning("=" * 70)
-
-    os.environ["LITELLM_LOG"] = "ERROR"
-    litellm.set_verbose = False
-    litellm.drop_params = True
-    if USE_EMBEDDING_BATCHER:
-        batcher = EmbeddingBatcher(client=client)
-        app.state.embedding_batcher = batcher
-        logging.info("RotatingClient and EmbeddingBatcher initialized.")
-    else:
-        app.state.embedding_batcher = None
-        logging.info("RotatingClient initialized (EmbeddingBatcher disabled).")
-
-    # Start model info service in background (fetches pricing/capabilities data)
-    # This runs asynchronously and doesn't block proxy startup
-    model_info_service = await init_model_info_service()
-    app.state.model_info_service = model_info_service
-    logging.info("Model info service started (fetching pricing data in background).")
-
-    yield
-
-    await client.background_refresher.stop()  # Stop the background task on shutdown
-    if app.state.embedding_batcher:
-        await app.state.embedding_batcher.stop()
-    await client.close()
-
-    # Stop model info service
-    if hasattr(app.state, "model_info_service") and app.state.model_info_service:
-        await app.state.model_info_service.stop()
-
-    if app.state.embedding_batcher:
-        logging.info("RotatingClient and EmbeddingBatcher closed.")
-    else:
-        logging.info("RotatingClient closed.")
+    async with application_lifespan(app, dependencies):
+        yield
 
 
 # --- FastAPI App Setup ---
 app = FastAPI(lifespan=lifespan)
 
-# Add CORS middleware to allow all origins, methods, and headers
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, error: HTTPException) -> JSONResponse:
+    if request.url.path in {"/v1/messages", "/v1/messages/count_tokens"}:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=anthropic_error_content(error.status_code),
+            headers=error.headers,
+        )
+    return JSONResponse(
+        status_code=error.status_code,
+        content={"detail": error.detail},
+        headers=error.headers,
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(_request: Request, error: Exception) -> JSONResponse:
+    log_safe_exception("Unhandled request", error, 500)
+    return JSONResponse(status_code=500, content={"detail": public_error_detail(500)})
+
+
+from proxy_app.security_middleware import (
+    BindApprovalMiddleware,
+    TrustedHostMiddleware,
+)
+
+_cors_allowed_origins = _build_cors_allowed_origins()
+_allowed_hosts = list(_runtime_security_config.allowed_hosts)
+
+
+app.add_middleware(
+    BoundedJSONBodyMiddleware,
+    credential_config_getter=lambda: (
+        _runtime_security_config.proxy_api_key,
+        _runtime_security_config.is_current(),
+    ),
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=_cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
+app.add_middleware(
+    BindApprovalMiddleware,
+    runtime_config_getter=lambda: _runtime_security_config,
+)
+app.add_middleware(SafeUnhandledErrorMiddleware)
 
 
 def get_rotating_client(request: Request) -> RotatingClient:
@@ -786,34 +595,70 @@ def get_embedding_batcher(request: Request) -> EmbeddingBatcher:
     return request.app.state.embedding_batcher
 
 
-async def verify_api_key(auth: str = Depends(api_key_header)):
-    """Dependency to verify the proxy API key."""
-    # If PROXY_API_KEY is not set or empty, skip verification (open access)
-    if not PROXY_API_KEY:
-        return auth
-    if not auth or auth != f"Bearer {PROXY_API_KEY}":
+def _credential_header_values(request: Request) -> tuple[list[str], list[str]]:
+    authorization_values: list[str] = []
+    api_key_values: list[str] = []
+    for name, value in request.scope.get("headers", []):
+        normalized_name = name.lower()
+        if normalized_name == b"authorization":
+            authorization_values.append(value.decode("latin-1"))
+        elif normalized_name == b"x-api-key":
+            api_key_values.append(value.decode("latin-1"))
+    return authorization_values, api_key_values
+
+
+def _validated_credential_headers(request: Request) -> tuple[str | None, str | None]:
+    if not _runtime_security_config.is_current():
+        raise HTTPException(
+            status_code=503,
+            detail="Runtime security configuration changed after initialization",
+        )
+    authorization_values, api_key_values = _credential_header_values(request)
+    if (
+        len(authorization_values) > 1
+        or len(api_key_values) > 1
+        or (authorization_values and api_key_values)
+    ):
         raise HTTPException(status_code=401, detail="Invalid or missing API Key")
-    return auth
+    authorization = authorization_values[0] if authorization_values else None
+    api_key = api_key_values[0] if api_key_values else None
+    return authorization, api_key
 
 
-# --- Anthropic API Key Header ---
-anthropic_api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
+def _constant_time_equal(candidate: str, expected: str) -> bool:
+    return secrets.compare_digest(candidate.encode("utf-8"), expected.encode("utf-8"))
+
+
+async def verify_api_key(request: Request) -> str | None:
+    authorization, _api_key = _validated_credential_headers(request)
+    proxy_api_key = _runtime_security_config.proxy_api_key
+    if not proxy_api_key:
+        return None
+    expected_authorization = f"Bearer {proxy_api_key}"
+    if authorization is None or not _constant_time_equal(
+        authorization,
+        expected_authorization,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or missing API Key")
+    return authorization
 
 
 async def verify_anthropic_api_key(
-    x_api_key: str = Depends(anthropic_api_key_header),
-    auth: str = Depends(api_key_header),
-):
+    request: Request,
+) -> str:
     """
     Dependency to verify API key for Anthropic endpoints.
     Accepts either x-api-key header (Anthropic style) or Authorization Bearer (OpenAI style).
     """
-    # Check x-api-key first (Anthropic style)
-    if x_api_key and x_api_key == PROXY_API_KEY:
-        return x_api_key
-    # Fall back to Bearer token (OpenAI style)
-    if auth and auth == f"Bearer {PROXY_API_KEY}":
-        return auth
+    authorization, api_key = _validated_credential_headers(request)
+    proxy_api_key = _runtime_security_config.proxy_api_key
+    if not proxy_api_key:
+        return ""
+    if api_key and _constant_time_equal(api_key, proxy_api_key):
+        return api_key
+    expected_authorization = f"Bearer {proxy_api_key}"
+    if authorization and _constant_time_equal(authorization, expected_authorization):
+        return authorization
     raise HTTPException(status_code=401, detail="Invalid or missing API Key")
 
 
@@ -829,16 +674,25 @@ async def streaming_response_wrapper(
     """
     response_chunks = []
     full_response = {}
-
+    stream_failed = False
     try:
-        async for chunk_str in response_stream:
-            if await request.is_disconnected():
-                logging.warning("Client disconnected, stopping stream.")
-                break
-            yield chunk_str
-            if chunk_str.strip() and chunk_str.startswith("data:"):
-                content = chunk_str[len("data:") :].strip()
-                if content != "[DONE]":
+        policy = OpenAIStreamPolicy(
+            max_bytes=OPENAI_STREAM_MAX_BYTES,
+            max_events=OPENAI_STREAM_MAX_EVENTS,
+            idle_timeout_seconds=OPENAI_STREAM_IDLE_TIMEOUT_SECONDS,
+            total_timeout_seconds=OPENAI_STREAM_TOTAL_TIMEOUT_SECONDS,
+        )
+        bounded_stream = bounded_sse_stream(
+            response_stream,
+            policy,
+            OPENAI_STREAM_CAPACITY,
+        )
+        async with aclosing(bounded_stream):
+            disconnect_check = request.is_disconnected
+            async for chunk_str in require_openai_terminal(bounded_stream, disconnect_check):
+                yield chunk_str
+                content = sse_data_content(chunk_str)
+                if content is not None and content != "[DONE]":
                     try:
                         chunk_data = json.loads(content)
                         response_chunks.append(chunk_data)
@@ -847,20 +701,15 @@ async def streaming_response_wrapper(
                     except json.JSONDecodeError:
                         pass
     except Exception as e:
-        logging.error(f"An error occurred during the response stream: {e}")
+        stream_failed = True
+        log_safe_exception("OpenAI response stream", e, 500)
         # Yield a final error message to the client to ensure they are not left hanging.
-        error_payload = {
-            "error": {
-                "message": f"An unexpected error occurred during the stream: {str(e)}",
-                "type": "proxy_internal_error",
-                "code": 500,
-            }
-        }
-        yield f"data: {json.dumps(error_payload)}\n\n"
+        error_payload = {"error": public_error_detail(500, code="stream_error")}
+        yield f"\n\ndata: {json.dumps(error_payload)}\n\n"
         yield "data: [DONE]\n\n"
         # Also log this as a failed request
         if logger:
-            logger.log_final_response(status_code=500, headers=None, body={"error": str(e)})
+            logger.log_final_response(status_code=500, headers=None, body=error_payload)
         return  # Stop further processing
     finally:
         if response_chunks:
@@ -929,8 +778,7 @@ async def streaming_response_wrapper(
                                         "arguments"
                                     ]
 
-                        else:  # Generic key handling for other data like 'reasoning'
-                            # FIX: Role should always replace, never concatenate
+                        else:
                             if key == "role":
                                 final_message[key] = value
                             elif key not in final_message:
@@ -949,8 +797,6 @@ async def streaming_response_wrapper(
             # --- Final Response Construction ---
             if aggregated_tool_calls:
                 final_message["tool_calls"] = list(aggregated_tool_calls.values())
-                # CRITICAL FIX: Override finish_reason when tool_calls exist
-                # This ensures OpenCode and other agentic systems continue the conversation loop
                 finish_reason = "tool_calls"
 
             # Ensure standard fields are present for consistent logging
@@ -974,12 +820,50 @@ async def streaming_response_wrapper(
                 "usage": usage_data,
             }
 
-        if logger:
+        if logger and not stream_failed:
             logger.log_final_response(
                 status_code=200,
                 headers=None,  # Headers are not available at this stage
                 body=full_response,
             )
+
+
+def _safe_http_exception(
+    status: int,
+    context: str,
+    error: BaseException,
+    *,
+    raw_logger: Optional[RawIOLogger] = None,
+    code: str | None = None,
+) -> HTTPException:
+    log_safe_exception(context, error, status)
+    detail = public_error_detail(status, code=code)
+    if raw_logger:
+        raw_logger.log_final_response(status_code=status, headers=None, body={"error": detail})
+    return HTTPException(status_code=status, detail=detail)
+
+
+def reject_non_chat_inference_in_safe_mode() -> None:
+    _ensure_local_transport_configuration_current()
+    if _local_transport_runtime_policy.enabled:
+        raise HTTPException(
+            status_code=409,
+            detail=public_error_detail(
+                409,
+                code="local_transport_endpoint_disabled",
+            ),
+        )
+
+
+def _ensure_local_transport_configuration_current() -> None:
+    if not _local_transport_runtime_policy.is_current(os.environ):
+        raise HTTPException(
+            status_code=503,
+            detail=public_error_detail(
+                503,
+                code="local_transport_configuration_changed",
+            ),
+        )
 
 
 def build_credential_summary(
@@ -1052,6 +936,21 @@ async def chat_completions(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON in request body.")
 
+        _ensure_local_transport_configuration_current()
+        if _local_transport_runtime_policy.enabled:
+            model = request_data.get("model")
+            if (
+                not isinstance(model, str)
+                or not model.startswith("xai_oauth/")
+                or model == "xai_oauth/"
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=public_error_detail(
+                        400,
+                        code="local_transport_xai_only",
+                    ),
+                )
         # Global temperature=0 override (controlled by .env variable, default: OFF)
         # Low temperature makes models deterministic and prone to following training data
         # instead of actual schemas, which can cause tool hallucination
@@ -1136,40 +1035,29 @@ async def chat_completions(
         ValueError,
         litellm.ContextWindowExceededError,
     ) as e:
-        raise HTTPException(status_code=400, detail=f"Invalid Request: {str(e)}")
+        raise _safe_http_exception(400, "OpenAI request", e, raw_logger=raw_logger)
     except HTTPException:
         raise
     except NoAvailableKeysError as e:
-        # acquisition-timeout error — diagnostics already attached to the exception
-        error_payload = {
-            "message": e.message,
-            "type": "proxy_busy",
-            "code": e.code,
-        }
-        if e.diagnostics:
-            error_payload["diagnostics"] = e.diagnostics
-        raise HTTPException(status_code=503, detail=error_payload)
+        raise _safe_http_exception(
+            503,
+            "OpenAI credential acquisition",
+            e,
+            raw_logger=raw_logger,
+            code="proxy_busy",
+        )
     except litellm.AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=f"Authentication Error: {str(e)}")
+        raise _safe_http_exception(401, "OpenAI authentication", e, raw_logger=raw_logger)
     except litellm.RateLimitError as e:
-        raise HTTPException(status_code=429, detail=f"Rate Limit Exceeded: {str(e)}")
+        raise _safe_http_exception(429, "OpenAI rate limit", e, raw_logger=raw_logger)
     except (litellm.ServiceUnavailableError, litellm.APIConnectionError) as e:
-        raise HTTPException(status_code=503, detail=f"Service Unavailable: {str(e)}")
+        raise _safe_http_exception(503, "OpenAI service", e, raw_logger=raw_logger)
     except litellm.Timeout as e:
-        raise HTTPException(status_code=504, detail=f"Gateway Timeout: {str(e)}")
+        raise _safe_http_exception(504, "OpenAI timeout", e, raw_logger=raw_logger)
     except (litellm.InternalServerError, litellm.OpenAIError) as e:
-        raise HTTPException(status_code=502, detail=f"Bad Gateway: {str(e)}")
+        raise _safe_http_exception(502, "OpenAI upstream", e, raw_logger=raw_logger)
     except Exception as e:
-        logging.error(f"Request failed after all retries: {e}")
-        # Optionally log the failed request
-        if ENABLE_REQUEST_LOGGING:
-            try:
-                request_data = await request.json()
-            except json.JSONDecodeError:
-                request_data = {"error": "Could not parse request body"}
-            if raw_logger:
-                raw_logger.log_final_response(status_code=500, headers=None, body={"error": str(e)})
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_http_exception(500, "OpenAI request", e, raw_logger=raw_logger)
 
 
 # --- Anthropic Messages API Endpoint ---
@@ -1179,6 +1067,7 @@ async def anthropic_messages(
     body: AnthropicMessagesRequest,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_anthropic_api_key),
+    _local_transport_guard=Depends(reject_non_chat_inference_in_safe_mode),
 ):
     """
     Anthropic-compatible Messages API endpoint.
@@ -1216,7 +1105,7 @@ async def anthropic_messages(
         if body.stream:
             # Streaming response
             return StreamingResponse(
-                result,
+                anthropic_streaming_response_wrapper(result, logger, request=request),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1239,48 +1128,17 @@ async def anthropic_messages(
         ValueError,
         litellm.ContextWindowExceededError,
     ) as e:
-        error_response = {
-            "type": "error",
-            "error": {"type": "invalid_request_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=400, detail=error_response)
+        raise _safe_http_exception(400, "Anthropic messages", e, raw_logger=logger)
     except litellm.AuthenticationError as e:
-        error_response = {
-            "type": "error",
-            "error": {"type": "authentication_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=401, detail=error_response)
+        raise _safe_http_exception(401, "Anthropic messages", e, raw_logger=logger)
     except litellm.RateLimitError as e:
-        error_response = {
-            "type": "error",
-            "error": {"type": "rate_limit_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=429, detail=error_response)
+        raise _safe_http_exception(429, "Anthropic messages", e, raw_logger=logger)
     except (litellm.ServiceUnavailableError, litellm.APIConnectionError) as e:
-        error_response = {
-            "type": "error",
-            "error": {"type": "api_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=503, detail=error_response)
+        raise _safe_http_exception(503, "Anthropic messages", e, raw_logger=logger)
     except litellm.Timeout as e:
-        error_response = {
-            "type": "error",
-            "error": {"type": "api_error", "message": f"Request timed out: {str(e)}"},
-        }
-        raise HTTPException(status_code=504, detail=error_response)
+        raise _safe_http_exception(504, "Anthropic messages", e, raw_logger=logger)
     except Exception as e:
-        logging.error(f"Anthropic messages endpoint error: {e}")
-        if logger:
-            logger.log_final_response(
-                status_code=500,
-                headers=None,
-                body={"error": str(e)},
-            )
-        error_response = {
-            "type": "error",
-            "error": {"type": "api_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=500, detail=error_response)
+        raise _safe_http_exception(500, "Anthropic messages", e, raw_logger=logger)
 
 
 # --- Anthropic Count Tokens Endpoint ---
@@ -1290,6 +1148,7 @@ async def anthropic_count_tokens(
     body: AnthropicCountTokensRequest,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_anthropic_api_key),
+    _local_transport_guard=Depends(reject_non_chat_inference_in_safe_mode),
 ):
     """
     Anthropic-compatible count_tokens endpoint.
@@ -1309,24 +1168,17 @@ async def anthropic_count_tokens(
         ValueError,
         litellm.ContextWindowExceededError,
     ) as e:
-        error_response = {
-            "type": "error",
-            "error": {"type": "invalid_request_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=400, detail=error_response)
+        raise _safe_http_exception(400, "Anthropic token count", e)
     except litellm.AuthenticationError as e:
-        error_response = {
-            "type": "error",
-            "error": {"type": "authentication_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=401, detail=error_response)
+        raise _safe_http_exception(401, "Anthropic token count", e)
+    except litellm.RateLimitError as e:
+        raise _safe_http_exception(429, "Anthropic token count", e)
+    except (litellm.ServiceUnavailableError, litellm.APIConnectionError) as e:
+        raise _safe_http_exception(503, "Anthropic token count", e)
+    except litellm.Timeout as e:
+        raise _safe_http_exception(504, "Anthropic token count", e)
     except Exception as e:
-        logging.error(f"Anthropic count_tokens endpoint error: {e}")
-        error_response = {
-            "type": "error",
-            "error": {"type": "api_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=500, detail=error_response)
+        raise _safe_http_exception(500, "Anthropic token count", e)
 
 
 @app.post("/v1/embeddings")
@@ -1336,6 +1188,7 @@ async def embeddings(
     client: RotatingClient = Depends(get_rotating_client),
     batcher: Optional[EmbeddingBatcher] = Depends(get_embedding_batcher),
     _=Depends(verify_api_key),
+    _local_transport_guard=Depends(reject_non_chat_inference_in_safe_mode),
 ):
     """
     OpenAI-compatible endpoint for creating embeddings.
@@ -1404,20 +1257,19 @@ async def embeddings(
         ValueError,
         litellm.ContextWindowExceededError,
     ) as e:
-        raise HTTPException(status_code=400, detail=f"Invalid Request: {str(e)}")
+        raise _safe_http_exception(400, "Embedding request", e)
     except litellm.AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=f"Authentication Error: {str(e)}")
+        raise _safe_http_exception(401, "Embedding request", e)
     except litellm.RateLimitError as e:
-        raise HTTPException(status_code=429, detail=f"Rate Limit Exceeded: {str(e)}")
+        raise _safe_http_exception(429, "Embedding request", e)
     except (litellm.ServiceUnavailableError, litellm.APIConnectionError) as e:
-        raise HTTPException(status_code=503, detail=f"Service Unavailable: {str(e)}")
+        raise _safe_http_exception(503, "Embedding request", e)
     except litellm.Timeout as e:
-        raise HTTPException(status_code=504, detail=f"Gateway Timeout: {str(e)}")
+        raise _safe_http_exception(504, "Embedding request", e)
     except (litellm.InternalServerError, litellm.OpenAIError) as e:
-        raise HTTPException(status_code=502, detail=f"Bad Gateway: {str(e)}")
+        raise _safe_http_exception(502, "Embedding request", e)
     except Exception as e:
-        logging.error(f"Embedding request failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_http_exception(500, "Embedding request", e)
 
 
 @app.get("/")
@@ -1444,7 +1296,11 @@ async def list_models(
         enriched: If True (default), returns detailed model info with pricing and capabilities.
                   If False, returns minimal OpenAI-compatible response.
     """
-    model_ids = await client.get_all_available_models(grouped=False)
+    _ensure_local_transport_configuration_current()
+    if _local_transport_runtime_policy.enabled:
+        model_ids = await client.get_available_models("xai_oauth")
+    else:
+        model_ids = await client.get_all_available_models(grouped=False)
 
     if enriched and hasattr(request.app.state, "model_info_service"):
         model_info_service = request.app.state.model_info_service
@@ -1551,12 +1407,12 @@ async def get_quota_stats(
             "timestamp": float
         }
     """
+    _ensure_local_transport_configuration_current()
     try:
         stats = await client.get_quota_stats(provider_filter=provider)
         return stats
     except Exception as e:
-        logging.error(f"Failed to get quota stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_http_exception(500, "Quota stats", e)
 
 
 @app.post("/v1/quota-stats")
@@ -1584,12 +1440,22 @@ async def refresh_quota_stats(
     Returns:
         Same as GET, plus a "refresh_result" field with operation details.
     """
+    _ensure_local_transport_configuration_current()
     try:
         data = await request.json()
         action = data.get("action", "reload")
         scope = data.get("scope", "all")
         provider = data.get("provider")
         credential = data.get("credential")
+
+        if action == "force_refresh" and _local_transport_runtime_policy.enabled:
+            raise HTTPException(
+                status_code=409,
+                detail=public_error_detail(
+                    409,
+                    code="local_transport_live_refresh_disabled",
+                ),
+            )
 
         # Validate parameters
         if action not in ("reload", "force_refresh"):
@@ -1619,8 +1485,6 @@ async def refresh_quota_stats(
         refresh_result = {
             "action": action,
             "scope": scope,
-            "provider": provider,
-            "credential": credential,
         }
 
         if action == "reload":
@@ -1650,19 +1514,16 @@ async def refresh_quota_stats(
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Failed to refresh quota stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_http_exception(500, "Quota refresh", e)
 
 
 @app.post("/v1/token-count")
 async def token_count(
     request: Request,
+    _local_transport_guard=Depends(reject_non_chat_inference_in_safe_mode),
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
 ):
-    """
-    Calculates the token count for a given list of messages and a model.
-    """
     try:
         data = await request.json()
         model = data.get("model")
@@ -1674,9 +1535,10 @@ async def token_count(
         count = client.token_count(**data)
         return {"token_count": count}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logging.error(f"Token count failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_http_exception(500, "Token count", e)
 
 
 @app.post("/v1/cost-estimate")
@@ -1770,8 +1632,7 @@ async def cost_estimate(request: Request, _=Depends(verify_api_key)):
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Cost estimate failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_http_exception(500, "Cost estimate", e)
 
 
 if __name__ == "__main__":
@@ -1839,7 +1700,7 @@ if __name__ == "__main__":
 
         ensure_env_defaults()
         # Reload environment variables after ensure_env_defaults creates/updates .env
-        load_dotenv(ENV_FILE, override=True)
+        _load_router_env(ENV_FILE, _tui_network_bind_approval)
         run_credential_tool()
     else:
         # Check if onboarding is needed
@@ -1857,13 +1718,12 @@ if __name__ == "__main__":
             from rotator_library.credential_tool import ensure_env_defaults
 
             ensure_env_defaults()
-            load_dotenv(ENV_FILE, override=True)
+            _load_router_env(ENV_FILE, _tui_network_bind_approval)
             run_credential_tool()
 
             # After credential tool exits, reload and re-check
-            load_dotenv(ENV_FILE, override=True)
-            # Re-read PROXY_API_KEY from environment
-            PROXY_API_KEY = os.getenv("PROXY_API_KEY")
+            _load_router_env(ENV_FILE, _tui_network_bind_approval)
+            _runtime_security_config = _build_runtime_security_config()
 
             # Verify onboarding is complete
             if needs_onboarding():

@@ -6,7 +6,7 @@ import json
 import os
 import hashlib
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional
 import httpx
 
 from litellm.exceptions import (
@@ -253,6 +253,56 @@ NORMAL_ERROR_TYPES = frozenset(
     }
 )
 
+PUBLIC_FAILURE_CATEGORIES = (
+    ABNORMAL_ERROR_TYPES
+    | NORMAL_ERROR_TYPES
+    | frozenset(
+        {
+            "context_window_exceeded",
+            "credential_reauth_needed",
+            "invalid_request",
+            "unknown",
+        }
+    )
+)
+
+_PUBLIC_STREAM_ERRORS = {
+    "proxy_busy": (
+        "proxy_busy",
+        "acquisition_timeout",
+        503,
+        "No upstream credential is currently available. Retry later.",
+    ),
+    "quota_exceeded": (
+        "rate_limit_error",
+        "quota_exceeded",
+        429,
+        "The upstream service rate limited the request. Retry later.",
+    ),
+    "internal_error": (
+        "proxy_internal_error",
+        "stream_error",
+        500,
+        "The proxy could not complete the streaming request.",
+    ),
+}
+
+
+def build_public_stream_error(category: str) -> dict[str, dict[str, str | int]]:
+    """Return an allowlisted terminal SSE error without provider-controlled values."""
+    error_type, code, status, message = _PUBLIC_STREAM_ERRORS.get(
+        category,
+        _PUBLIC_STREAM_ERRORS["internal_error"],
+    )
+    return {
+        "error": {
+            "type": error_type,
+            "code": code,
+            "status": status,
+            "message": message,
+        }
+    }
+
 
 def is_abnormal_error(classified_error: "ClassifiedError") -> bool:
     """
@@ -296,26 +346,24 @@ class RequestErrorAccumulator:
     """
 
     def __init__(self):
-        self.abnormal_errors: list = []  # 403, 401 - always report details
-        self.normal_errors: list = []  # 429, 5xx - summarize only
+        self.abnormal_errors: list = []  # 403, 401 - category and status only
+        self.normal_errors: list = []  # 429, 5xx - category and status only
         self._tried_credentials: set = set()  # Track unique credentials
         self.timeout_occurred: bool = False
         self.model: str = ""
         self.provider: str = ""
-        self.acquisition_diagnostics: dict | None = None  # Captured from NoAvailableKeysError
 
     def record_error(
-        self, credential: str, classified_error: "ClassifiedError", error_message: str
+        self, credential: str, classified_error: "ClassifiedError", _error_message: str
     ):
-        """Record an error for a credential."""
+        """Record only allowlisted failure metadata for a credential."""
         self._tried_credentials.add(credential)
-        masked_cred = mask_credential(credential)
-
+        category = classified_error.error_type
+        if category not in PUBLIC_FAILURE_CATEGORIES:
+            category = "unknown"
         error_record = {
-            "credential": masked_cred,
-            "error_type": classified_error.error_type,
+            "error_type": category,
             "status_code": classified_error.status_code,
-            "message": self._truncate_message(error_message, 150),
         }
 
         if is_abnormal_error(classified_error):
@@ -327,14 +375,6 @@ class RequestErrorAccumulator:
     def total_credentials_tried(self) -> int:
         """Return the number of unique credentials tried."""
         return len(self._tried_credentials)
-
-    def _truncate_message(self, message: str, max_length: int = 150) -> str:
-        """Truncate error message for readability."""
-        # Take first line and truncate
-        first_line = message.split("\n")[0]
-        if len(first_line) > max_length:
-            return first_line[:max_length] + "..."
-        return first_line
 
     def has_errors(self) -> bool:
         """Check if any errors were recorded."""
@@ -350,7 +390,7 @@ class RequestErrorAccumulator:
             return ""
 
         # Count by type
-        counts = {}
+        counts: dict[str, int] = {}
         for err in self.normal_errors:
             err_type = err["error_type"]
             counts[err_type] = counts.get(err_type, 0) + 1
@@ -359,10 +399,17 @@ class RequestErrorAccumulator:
         parts = [f"{count} {err_type}" for err_type, count in counts.items()]
         return ", ".join(parts)
 
-    def record_acquisition_diagnostics(self, diagnostics: dict):
-        """Record diagnostics captured from a NoAvailableKeysError during acquisition."""
-        if not self.acquisition_diagnostics:
-            self.acquisition_diagnostics = diagnostics
+    def record_acquisition_diagnostics(self, _diagnostics: dict):
+        """Accept legacy diagnostics without retaining provider-controlled values."""
+        return None
+
+    def get_failure_categories(self) -> dict[str, int]:
+        """Return low-cardinality counts by classified failure category."""
+        counts: dict[str, int] = {}
+        for error in self.abnormal_errors + self.normal_errors:
+            category = error["error_type"]
+            counts[category] = counts.get(category, 0) + 1
+        return counts
 
     def build_client_error_response(self) -> dict:
         """
@@ -374,66 +421,27 @@ class RequestErrorAccumulator:
         if self.timeout_occurred:
             error_type = "proxy_timeout"
             error_code = "global_timeout_exhausted"
-            base_message = (
-                f"Request timed out after trying {self.total_credentials_tried} credential(s)"
-            )
+            status = 504
+            message = "The proxy timed out while acquiring an upstream credential."
         else:
             error_type = "proxy_all_credentials_exhausted"
             error_code = "all_credentials_exhausted"
-            base_message = (
-                f"All {self.total_credentials_tried} credential(s) exhausted for {self.provider}"
-            )
-
-        # Build human-readable message
-        message_parts = [base_message]
-
-        if self.abnormal_errors:
-            message_parts.append("\n\nCredential issues (require attention):")
-            for err in self.abnormal_errors:
-                status = (
-                    f"HTTP {err['status_code']}"
-                    if err["status_code"] is not None
-                    else err["error_type"]
-                )
-                message_parts.append(f"\n  • {err['credential']}: {status} - {err['message']}")
-
-        normal_summary = self.get_normal_error_summary()
-        if normal_summary:
-            if self.abnormal_errors:
-                message_parts.append(
-                    f"\n\nAdditionally: {normal_summary} (expected during normal operation)"
-                )
-            else:
-                message_parts.append(f"\n\nAll failures were: {normal_summary}")
-                message_parts.append(
-                    "\nThis is normal during high load - retry later or add more credentials."
-                )
+            status = 503
+            message = "No upstream credential is currently available. Retry later."
 
         response = {
             "error": {
-                "message": "".join(message_parts),
+                "message": message,
                 "type": error_type,
                 "code": error_code,
+                "status": status,
                 "details": {
-                    "model": self.model,
-                    "provider": self.provider,
                     "credentials_tried": self.total_credentials_tried,
                     "timeout": self.timeout_occurred,
+                    "failure_categories": self.get_failure_categories(),
                 },
             }
         }
-
-        # Only include abnormal errors in details (they need attention)
-        if self.abnormal_errors:
-            response["error"]["details"]["abnormal_errors"] = self.abnormal_errors
-
-        # Include summary of normal errors
-        if normal_summary:
-            response["error"]["details"]["normal_error_summary"] = normal_summary
-
-        if self.acquisition_diagnostics:
-            response["error"]["diagnostics"] = self.acquisition_diagnostics
-
         return response
 
     def build_log_message(self) -> str:
@@ -442,27 +450,16 @@ class RequestErrorAccumulator:
 
         Shorter than client message, suitable for terminal display.
         """
-        parts = []
-
-        if self.timeout_occurred:
-            parts.append(f"TIMEOUT: {self.total_credentials_tried} creds tried for {self.model}")
-        else:
-            parts.append(
-                f"ALL CREDS EXHAUSTED: {self.total_credentials_tried} tried for {self.model}"
-            )
-
-        if self.abnormal_errors:
-            abnormal_summary = ", ".join(
-                f"{e['credential']}={e['status_code'] or e['error_type']}"
-                for e in self.abnormal_errors
-            )
-            parts.append(f"ISSUES: {abnormal_summary}")
-
-        normal_summary = self.get_normal_error_summary()
-        if normal_summary:
-            parts.append(f"Normal: {normal_summary}")
-
-        return " | ".join(parts)
+        outcome = "timeout" if self.timeout_occurred else "credentials_exhausted"
+        categories = self.get_failure_categories()
+        category_summary = ",".join(
+            f"{category}:{count}" for category, count in sorted(categories.items())
+        )
+        return (
+            f"Request failed category={outcome} "
+            f"credentials_tried={self.total_credentials_tried} "
+            f"failure_categories={category_summary or 'none'}"
+        )
 
 
 class ClassifiedError:

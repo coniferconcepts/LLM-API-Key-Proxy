@@ -127,7 +127,7 @@ The Antigravity provider requires OAuth2 authentication similar to Gemini CLI. I
    - **Branch**: "main" (or your default).
    - **Runtime**: Python 3.
    - **Build Command**: `pip install -r requirements.txt`.
-   - **Start Command**: `uvicorn src.proxy_app.main:app --host 0.0.0.0 --port $PORT`.
+   - **Start Command**: `MIRROWEL_ALLOW_NETWORK_BIND=true MIRROWEL_ALLOWED_HOSTS=proxy.example.com uvicorn src.proxy_app.main:app --host 0.0.0.0 --port $PORT` (replace the example hostname with the service hostname). Public mode refuses to start unless `PROXY_API_KEY` is nonempty; allowed-host entries must omit schemes and ports.
    - **Instance Type**: Free (for testing; upgrade later for always-on service).
 6. Click **Create Web Service**. Render will build and deploy—watch the progress in the Events tab.
 
@@ -200,6 +200,9 @@ nano .env  # Add your PROXY_API_KEY and provider keys
 
 # Create key_usage.json file (required before first run)
 touch key_usage.json
+
+# Name the public Host headers the proxy may accept
+export MIRROWEL_ALLOWED_HOSTS=127.0.0.1,localhost
 ```
 
 > **Important:** You must create `key_usage.json` before running Docker Compose. If this file doesn't exist on the host, Docker will create it as a directory instead of a file, causing the container to fail.
@@ -236,13 +239,14 @@ touch key_usage.json
 docker run -d \
   --name llm-api-proxy \
   --restart unless-stopped \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
   -v $(pwd)/.env:/app/.env:ro \
   -v $(pwd)/oauth_creds:/app/oauth_creds \
   -v $(pwd)/logs:/app/logs \
   -v $(pwd)/key_usage.json:/app/key_usage.json \
   -e SKIP_OAUTH_INIT_CHECK=true \
   -e PYTHONUNBUFFERED=1 \
+  -e MIRROWEL_ALLOWED_HOSTS=127.0.0.1,localhost \
   ghcr.io/mirrowel/llm-api-key-proxy:latest
 ```
 
@@ -378,7 +382,7 @@ The image is built for both `linux/amd64` and `linux/arm64` architectures, so it
 | Container exits immediately   | Check logs: `docker compose logs` — likely missing `.env` or invalid config                                      |
 | Permission denied on volumes  | Ensure directories exist and have correct permissions: `mkdir -p oauth_creds logs && chmod 755 oauth_creds logs` |
 | OAuth credentials not loading | Verify `oauth_creds/` is mounted and contains valid JSON files, or check environment variables are set           |
-| Port already in use           | Change the port mapping: `-p 9000:8000` or edit `docker-compose.yml`                                             |
+| Port already in use           | Change the loopback mapping: `-p 127.0.0.1:9000:8000` or edit `docker-compose.yml`                              |
 | Image not updating            | Force pull: `docker compose pull && docker compose up -d`                                                        |
 
 ---
@@ -488,7 +492,7 @@ nano .env
 # Also add your PROXY_API_KEY and other provider keys
 
 # Start the proxy
-uvicorn src.proxy_app.main:app --host 0.0.0.0 --port 8000
+MIRROWEL_ALLOW_NETWORK_BIND=true MIRROWEL_ALLOWED_HOSTS=proxy.example.com uvicorn src.proxy_app.main:app --host 0.0.0.0 --port 8000
 ```
 
 **Method B: Upload Credential Files**
@@ -501,7 +505,7 @@ scp -r oauth_creds/ user@your-vps-ip:/path/to/LLM-API-Key-Proxy/
 ls -la oauth_creds/
 
 # Start the proxy
-uvicorn src.proxy_app.main:app --host 0.0.0.0 --port 8000
+MIRROWEL_ALLOW_NETWORK_BIND=true MIRROWEL_ALLOWED_HOSTS=proxy.example.com uvicorn src.proxy_app.main:app --host 0.0.0.0 --port 8000
 ```
 
 > **Note**: Environment variables are preferred for production deployments (more secure, easier to manage, works with container orchestration).
@@ -572,7 +576,7 @@ Still in the credential tool:
 # Tunnels are no longer needed
 
 # Start the proxy on VPS (in a screen/tmux session or as a service)
-uvicorn src.proxy_app.main:app --host 0.0.0.0 --port 8000
+MIRROWEL_ALLOW_NETWORK_BIND=true MIRROWEL_ALLOWED_HOSTS=proxy.example.com uvicorn src.proxy_app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ---
@@ -677,6 +681,8 @@ Type=simple
 User=your-username
 WorkingDirectory=/path/to/LLM-API-Key-Proxy
 Environment="PATH=/path/to/python/bin"
+Environment=MIRROWEL_ALLOW_NETWORK_BIND=true
+Environment=MIRROWEL_ALLOWED_HOSTS=proxy.example.com
 ExecStart=/path/to/python/bin/uvicorn src.proxy_app.main:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=10

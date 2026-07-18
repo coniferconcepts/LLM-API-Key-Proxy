@@ -16,6 +16,15 @@ import sys
 from pathlib import Path
 from typing import Optional, Union
 
+from ..secure_logging import secure_log_directory, secure_log_file
+
+
+def secure_logs_dir(logs_dir: Path) -> Path:
+    secure_log_directory(logs_dir)
+    for log_path in logs_dir.glob("*.log*"):
+        secure_log_file(log_path)
+    return logs_dir
+
 
 def get_default_root() -> Path:
     """
@@ -46,13 +55,10 @@ def get_logs_dir(root: Optional[Union[Path, str]] = None) -> Path:
     """
     base = Path(root) if root else get_default_root()
     logs_dir = base / "logs"
-    logs_dir.mkdir(exist_ok=True)
-    return logs_dir
+    return secure_logs_dir(logs_dir)
 
 
-def get_cache_dir(
-    root: Optional[Union[Path, str]] = None, subdir: Optional[str] = None
-) -> Path:
+def get_cache_dir(root: Optional[Union[Path, str]] = None, subdir: Optional[str] = None) -> Path:
     """
     Get the cache directory, optionally with a subdirectory.
 
