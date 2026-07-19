@@ -17,6 +17,12 @@ if _LOCAL_SRC_PATH in sys.path:
     sys.path.remove(_LOCAL_SRC_PATH)
 sys.path.insert(0, _LOCAL_SRC_PATH)
 
+from rotator_library.provider_call_budget import (
+    InvalidProviderCallBudget,
+    ProviderCallBudgetExhausted,
+    parse_provider_call_budget,
+)
+
 from proxy_app.runtime_security import (
     RuntimeSecurityConfig,  # noqa: F401 - compatibility export
     build_allowed_hosts as _build_allowed_hosts,  # noqa: F401 - compatibility export
@@ -700,6 +706,16 @@ async def streaming_response_wrapper(
                             logger.log_stream_chunk(chunk_data)
                     except json.JSONDecodeError:
                         pass
+    except ProviderCallBudgetExhausted as e:
+        stream_failed = True
+        status = _provider_call_budget_error_status(e)
+        log_safe_exception("OpenAI response stream", e, status)
+        error_payload = {"error": public_error_detail(status)}
+        yield f"\n\ndata: {json.dumps(error_payload)}\n\n"
+        yield "data: [DONE]\n\n"
+        if logger:
+            logger.log_final_response(status_code=status, headers=None, body=error_payload)
+        return
     except Exception as e:
         stream_failed = True
         log_safe_exception("OpenAI response stream", e, 500)
@@ -843,6 +859,34 @@ def _safe_http_exception(
     return HTTPException(status_code=status, detail=detail)
 
 
+def _provider_call_budget_error_status(error: ProviderCallBudgetExhausted) -> int:
+    first_failure = error.first_failure
+    status_code = getattr(first_failure, "status_code", None)
+    if not isinstance(status_code, int):
+        response = getattr(first_failure, "response", None)
+        status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int):
+        if status_code in {401, 403}:
+            return 401
+        if status_code == 429:
+            return 429
+        if status_code in {408, 504}:
+            return 504
+        if status_code >= 500:
+            return 503
+    if isinstance(first_failure, litellm.AuthenticationError):
+        return 401
+    if isinstance(first_failure, litellm.RateLimitError):
+        return 429
+    if isinstance(first_failure, litellm.Timeout):
+        return 504
+    if isinstance(first_failure, (litellm.ServiceUnavailableError, litellm.APIConnectionError)):
+        return 503
+    if isinstance(first_failure, (litellm.InternalServerError, litellm.OpenAIError)):
+        return 502
+    return 500
+
+
 def reject_non_chat_inference_in_safe_mode() -> None:
     _ensure_local_transport_configuration_current()
     if _local_transport_runtime_policy.enabled:
@@ -930,6 +974,10 @@ async def chat_completions(
     # Raw I/O logger captures unmodified HTTP data at proxy boundary (disabled by default)
     raw_logger = RawIOLogger() if ENABLE_RAW_LOGGING else None
     try:
+        try:
+            provider_call_budget = parse_provider_call_budget(request)
+        except InvalidProviderCallBudget as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         # Read and parse the request body only once at the beginning.
         try:
             request_data = await request.json()
@@ -1011,13 +1059,21 @@ async def chat_completions(
         is_streaming = request_data.get("stream", False)
 
         if is_streaming:
-            response_generator = client.acompletion(request=request, **request_data)
+            response_generator = client.acompletion(
+                request=request,
+                _provider_call_budget=provider_call_budget,
+                **request_data,
+            )
             return StreamingResponse(
                 streaming_response_wrapper(request, request_data, response_generator, raw_logger),
                 media_type="text/event-stream",
             )
         else:
-            response = await client.acompletion(request=request, **request_data)
+            response = await client.acompletion(
+                request=request,
+                _provider_call_budget=provider_call_budget,
+                **request_data,
+            )
             if raw_logger:
                 # Assuming response has status_code and headers attributes
                 # This might need adjustment based on the actual response object
@@ -1030,6 +1086,9 @@ async def chat_completions(
                 )
             return response
 
+    except ProviderCallBudgetExhausted as e:
+        status = _provider_call_budget_error_status(e)
+        raise _safe_http_exception(status, "OpenAI provider call budget", e, raw_logger=raw_logger)
     except (
         litellm.InvalidRequestError,
         ValueError,

@@ -51,6 +51,7 @@ from .config import (
     DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD,
     DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER,
 )
+from .provider_call_budget import ProviderCallBudget, ProviderCallBudgetExhausted
 
 if TYPE_CHECKING:
     from .anthropic_compat import AnthropicCountTokensRequest, AnthropicMessagesRequest
@@ -1312,6 +1313,7 @@ class RotatingClient:
 
         # Extract internal logging parameters (not passed to API)
         parent_log_dir = kwargs.pop("_parent_log_dir", None)
+        provider_call_budget = kwargs.pop("_provider_call_budget", ProviderCallBudget(None))
 
         # Establish a global deadline for the entire request lifecycle.
         deadline = time.time() + self.global_timeout
@@ -1445,6 +1447,9 @@ class RotatingClient:
             current_cred = None
             key_acquired = False
             try:
+                if provider_call_budget.exhausted:
+                    raise ProviderCallBudgetExhausted(last_exception)
+
                 # Check for a provider-wide cooldown first.
                 if await self.cooldown_manager.is_cooling_down(provider):
                     remaining_cooldown = await self.cooldown_manager.get_cooldown_remaining(
@@ -1554,6 +1559,9 @@ class RotatingClient:
                                             f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
                                         )
 
+                            if provider_call_budget.maximum is not None:
+                                litellm_kwargs["max_retries"] = 0
+                            provider_call_budget.admit(last_exception)
                             response = await provider_plugin.acompletion(
                                 self.http_client, **litellm_kwargs
                             )
@@ -1575,6 +1583,8 @@ class RotatingClient:
 
                             return response
 
+                        except ProviderCallBudgetExhausted:
+                            raise
                         except (
                             litellm.RateLimitError,
                             httpx.HTTPStatusError,
@@ -1785,7 +1795,10 @@ class RotatingClient:
                             final_kwargs = self.provider_config.convert_for_litellm(
                                 **litellm_kwargs
                             )
+                            if provider_call_budget.maximum is not None:
+                                final_kwargs["max_retries"] = 0
 
+                            provider_call_budget.admit(last_exception)
                             response = await api_call(
                                 **final_kwargs,
                                 logger_fn=self._litellm_logger_callback,
@@ -1807,6 +1820,8 @@ class RotatingClient:
 
                             return response
 
+                        except ProviderCallBudgetExhausted:
+                            raise
                         except litellm.RateLimitError as e:
                             last_exception = e
                             log_failure(
@@ -2024,6 +2039,9 @@ class RotatingClient:
             # Log concise summary for server logs
             lib_logger.error(error_accumulator.build_log_message())
 
+            if provider_call_budget.exhausted and last_exception is not None:
+                raise ProviderCallBudgetExhausted(last_exception)
+
             # Return the structured error response for the client
             return error_accumulator.build_client_error_response()
 
@@ -2042,6 +2060,7 @@ class RotatingClient:
     ) -> AsyncGenerator[str, None]:
         """A dedicated generator for retrying streaming completions with full request preparation and per-key retries."""
         model = kwargs.get("model")
+        provider_call_budget = kwargs.pop("_provider_call_budget", ProviderCallBudget(None))
         if not model:
             raise ValueError("'model' is a required parameter.")
 
@@ -2187,6 +2206,9 @@ class RotatingClient:
                 current_cred = None
                 key_acquired = False
                 try:
+                    if provider_call_budget.exhausted:
+                        raise ProviderCallBudgetExhausted(last_exception)
+
                     if await self.cooldown_manager.is_cooling_down(provider):
                         remaining_cooldown = await self.cooldown_manager.get_cooldown_remaining(
                             provider
@@ -2300,6 +2322,9 @@ class RotatingClient:
                                                 type(e).__name__,
                                             )
 
+                                if provider_call_budget.maximum is not None:
+                                    litellm_kwargs["max_retries"] = 0
+                                provider_call_budget.admit(last_exception)
                                 response = await provider_plugin.acompletion(
                                     self.http_client, **litellm_kwargs
                                 )
@@ -2326,6 +2351,8 @@ class RotatingClient:
                                     yield chunk
                                 return
 
+                            except ProviderCallBudgetExhausted:
+                                raise
                             except (
                                 StreamedAPIError,
                                 litellm.RateLimitError,
@@ -2544,7 +2571,10 @@ class RotatingClient:
                             final_kwargs = self.provider_config.convert_for_litellm(
                                 **litellm_kwargs
                             )
+                            if provider_call_budget.maximum is not None:
+                                final_kwargs["max_retries"] = 0
 
+                            provider_call_budget.admit(last_exception)
                             response = await litellm.acompletion(
                                 **final_kwargs,
                                 logger_fn=self._litellm_logger_callback,
@@ -2570,6 +2600,8 @@ class RotatingClient:
                                 yield chunk
                             return
 
+                        except ProviderCallBudgetExhausted:
+                            raise
                         except (
                             StreamedAPIError,
                             litellm.RateLimitError,
@@ -2787,6 +2819,9 @@ class RotatingClient:
                 # Log concise summary for server logs
                 lib_logger.error(error_accumulator.build_log_message())
 
+                if provider_call_budget.exhausted and last_exception is not None:
+                    raise ProviderCallBudgetExhausted(last_exception)
+
                 # Build structured error response for client
                 error_response = error_accumulator.build_client_error_response()
                 error_data = error_response
@@ -2802,6 +2837,8 @@ class RotatingClient:
             error_data = build_public_stream_error("proxy_busy")
             yield f"data: {json.dumps(error_data)}\n\n"
             yield "data: [DONE]\n\n"
+        except ProviderCallBudgetExhausted:
+            raise
         except Exception as e:
             lib_logger.error(
                 "Streaming request failed category=internal_error error_type=%s",
