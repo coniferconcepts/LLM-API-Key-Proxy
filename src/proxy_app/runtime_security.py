@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from ipaddress import ip_address
+from unicodedata import category
+from urllib.parse import urlsplit
 
 
 def env_flag_enabled(name: str) -> bool:
@@ -70,7 +72,7 @@ def validate_bind_host(host: str, config: RuntimeSecurityConfig | None = None) -
 
 
 def build_cors_allowed_origins() -> list[str]:
-    configured_origins = os.getenv("MIRROWEL_CORS_ALLOWED_ORIGINS", "").strip()
+    configured_origins = os.getenv("MIRROWEL_CORS_ALLOWED_ORIGINS", "")
     if not configured_origins:
         return [
             "http://127.0.0.1",
@@ -79,10 +81,77 @@ def build_cors_allowed_origins() -> list[str]:
             "http://localhost:8000",
         ]
 
-    origins = [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
+    origins = configured_origins.split(",")
+    if any(not origin or origin != origin.strip() for origin in origins):
+        raise SystemExit("MIRROWEL_CORS_ALLOWED_ORIGINS entries must be absolute HTTP(S) origins")
     if "*" in origins:
         raise SystemExit("Credentialed CORS must use explicit origins; wildcard '*' is forbidden")
-    return origins
+    return list(dict.fromkeys(_canonical_cors_origin(origin) for origin in origins))
+
+
+def _canonical_cors_origin(origin: str) -> str:
+    error = "MIRROWEL_CORS_ALLOWED_ORIGINS entries must be absolute HTTP(S) origins"
+    if any(character.isspace() or category(character).startswith("C") for character in origin):
+        raise SystemExit(error)
+    try:
+        parsed = urlsplit(origin)
+        port = parsed.port
+    except ValueError:
+        raise SystemExit(error) from None
+    hostname = parsed.hostname
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or (port is None and parsed.netloc.endswith(":"))
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or not _valid_cors_hostname(hostname)
+        or not _has_canonical_authority_syntax(parsed.netloc, hostname, port)
+    ):
+        raise SystemExit(error)
+
+    try:
+        normalized_host = str(ip_address(hostname))
+    except ValueError:
+        normalized_host = hostname.lower()
+    authority = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
+    scheme = parsed.scheme.lower()
+    if port is not None and port != {"http": 80, "https": 443}[scheme]:
+        authority = f"{authority}:{port}"
+    return f"{scheme}://{authority}"
+
+
+def _valid_cors_hostname(hostname: str) -> bool:
+    if "*" in hostname or "%" in hostname:
+        return False
+    try:
+        ip_address(hostname)
+        return True
+    except ValueError:
+        return not _looks_like_noncanonical_ipv4(hostname) and _valid_allowed_host_pattern(
+            hostname.lower()
+        )
+
+
+def _looks_like_noncanonical_ipv4(hostname: str) -> bool:
+    return all(_is_legacy_numeric_host_token(label) for label in hostname.lower().split("."))
+
+
+def _is_legacy_numeric_host_token(label: str) -> bool:
+    return label.isdigit() or (
+        label.startswith("0x")
+        and len(label) > 2
+        and all(character in "0123456789abcdef" for character in label[2:])
+    )
+
+
+def _has_canonical_authority_syntax(netloc: str, hostname: str, port: int | None) -> bool:
+    raw_host = f"[{hostname}]" if ":" in hostname else hostname
+    expected_authority = raw_host if port is None else f"{raw_host}:{port}"
+    return netloc.lower() == expected_authority.lower()
 
 
 def _valid_allowed_host_pattern(pattern: str) -> bool:

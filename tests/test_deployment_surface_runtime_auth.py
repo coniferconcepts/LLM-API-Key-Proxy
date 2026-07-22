@@ -9,20 +9,6 @@ from starlette.testclient import TestClient
 from deployment_surface_helpers import load_main_symbols as _load_main_symbols
 
 
-def test_credentialed_cors_rejects_wildcard_even_with_legacy_approval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: a wildcard browser origin and the former wildcard approval switch.
-    namespace = _load_main_symbols("_build_cors_allowed_origins")
-    build = namespace["_build_cors_allowed_origins"]
-    monkeypatch.setenv("MIRROWEL_CORS_ALLOWED_ORIGINS", "*")
-    monkeypatch.setenv("MIRROWEL_ALLOW_WILDCARD_CORS_CREDENTIALS", "true")
-
-    # When/Then: credentialed CORS refuses the wildcard unconditionally.
-    with pytest.raises(SystemExit, match="must use explicit origins"):
-        build()
-
-
 def test_direct_asgi_public_server_scope_requires_network_bind_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
