@@ -33,6 +33,7 @@ from .error_handler import (
 from .provider_config import ProviderConfig
 from .providers import PROVIDER_PLUGINS
 from .providers.openai_compatible_provider import OpenAICompatibleProvider
+from .openai_stream_normalize import OpenAIStreamNormalizer
 from .request_sanitizer import sanitize_request_payload
 from .cooldown_manager import CooldownManager
 from .credential_manager import CredentialManager
@@ -1050,6 +1051,7 @@ class RotatingClient:
         json_buffer = ""
         accumulated_finish_reason = None  # Track strongest finish_reason across chunks
         has_tool_calls = False  # Track if ANY tool calls were seen in stream
+        stream_normalizer = OpenAIStreamNormalizer()
 
         try:
             while True:
@@ -1073,6 +1075,8 @@ class RotatingClient:
                         chunk_dict = chunk.model_dump()
                     else:
                         chunk_dict = chunk
+
+                    chunk_dict = stream_normalizer.normalize(chunk_dict)
 
                     # === FINISH_REASON LOGIC ===
                     # Providers send raw chunks without finish_reason logic.
