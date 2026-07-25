@@ -1781,6 +1781,16 @@ class RotatingClient:
                                             f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
                                         )
 
+                            # Ensure provider-qualified model so OPENAI_API_BASE overrides apply.
+                            raw_model = litellm_kwargs.get("model")
+                            if (
+                                isinstance(raw_model, str)
+                                and raw_model
+                                and "/" not in raw_model
+                                and provider
+                            ):
+                                litellm_kwargs["model"] = f"{provider}/{raw_model}"
+
                             # Convert model parameters for custom providers right before LiteLLM call
                             final_kwargs = self.provider_config.convert_for_litellm(
                                 **litellm_kwargs
@@ -2540,6 +2550,16 @@ class RotatingClient:
                                         )
 
                             # lib_logger.info(f"DEBUG: litellm.acompletion kwargs: {litellm_kwargs}")
+                            # Ensure provider-qualified model so OPENAI_API_BASE overrides apply.
+                            raw_model = litellm_kwargs.get("model")
+                            if (
+                                isinstance(raw_model, str)
+                                and raw_model
+                                and "/" not in raw_model
+                                and provider
+                            ):
+                                litellm_kwargs["model"] = f"{provider}/{raw_model}"
+
                             # Convert model parameters for custom providers right before LiteLLM call
                             final_kwargs = self.provider_config.convert_for_litellm(
                                 **litellm_kwargs

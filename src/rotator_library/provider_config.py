@@ -17,9 +17,6 @@ from typing import Dict, Any, Set, Optional
 
 from .litellm_providers import (
     SCRAPED_PROVIDERS,
-    get_provider_route,
-    get_provider_api_key_var,
-    get_provider_display_name,
 )
 
 lib_logger = logging.getLogger("rotator_library")
@@ -734,7 +731,9 @@ class ProviderConfig:
             if key.endswith("_API_BASE") and value:
                 provider = key[:-9].lower()  # Remove _API_BASE
                 provider = API_BASE_PROVIDER_ALIASES.get(provider, provider)
-                if provider in ANTHROPIC_COMPATIBLE_CUSTOM_PROVIDERS and value.rstrip("/").endswith("/v1"):
+                if provider in ANTHROPIC_COMPATIBLE_CUSTOM_PROVIDERS and value.rstrip("/").endswith(
+                    "/v1"
+                ):
                     value = value.rstrip("/")[:-3]
                 self._api_bases[provider] = value.rstrip("/")
 
@@ -771,6 +770,7 @@ class ProviderConfig:
         Handles:
         - Known provider with _API_BASE: pass api_base as override
         - Unknown provider with _API_BASE: convert to openai/, set custom_llm_provider
+        - Bare OpenAI-family model ids (gpt-*, o1/o3/o4-*) when OPENAI_API_BASE is set
         - No _API_BASE configured: pass through unchanged
 
         Args:
@@ -784,7 +784,31 @@ class ProviderConfig:
             return kwargs
 
         # Extract provider from model string (e.g., "openai/gpt-4" → "openai")
-        provider = model.split("/")[0].lower()
+        if "/" in model:
+            provider = model.split("/", 1)[0].lower()
+        else:
+            # Bare model ids (common after internal resolution): apply openai base when
+            # OPENAI_API_BASE is configured and the id looks like an OpenAI family surface.
+            # Without this, LiteLLM routes sk-clb/* sidecar keys to api.openai.com (403).
+            bare = model.lower()
+            openai_base = self._api_bases.get("openai")
+            if openai_base and (
+                bare.startswith("gpt-")
+                or bare.startswith("o1")
+                or bare.startswith("o3")
+                or bare.startswith("o4")
+                or bare.startswith("chatgpt-")
+            ):
+                kwargs = kwargs.copy()
+                kwargs["model"] = f"openai/{model}"
+                kwargs["api_base"] = openai_base
+                kwargs["base_url"] = openai_base
+                lib_logger.info(
+                    "Applying openai api_base to bare model %s -> %s", model, openai_base
+                )
+                return kwargs
+            return kwargs
+
         api_base = self._api_bases.get(provider)
 
         if not api_base:
@@ -797,8 +821,10 @@ class ProviderConfig:
         if provider in KNOWN_PROVIDERS:
             # Known provider - just add api_base override
             kwargs["api_base"] = api_base
-            lib_logger.debug(
-                f"Applying api_base override for known provider {provider}: {api_base}"
+            # Some LiteLLM versions honor base_url over api_base for openai/*
+            kwargs["base_url"] = api_base
+            lib_logger.info(
+                "Applying api_base override for known provider %s: %s", provider, api_base
             )
         elif provider in ANTHROPIC_COMPATIBLE_CUSTOM_PROVIDERS:
             # Custom provider - route through Anthropic-compatible /messages endpoint.
