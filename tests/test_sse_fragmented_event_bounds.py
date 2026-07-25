@@ -283,10 +283,10 @@ async def test_non_data_fields_and_prefixes_do_not_consume_the_bound() -> None:
 
 @pytest.mark.asyncio
 async def test_many_tiny_fragments_cannot_turn_event_bound_into_byte_only_bound() -> None:
-    # Given 10,001 fields split into 20,002 chunks below the normal byte ceiling.
-    chunks = ("da", "ta:\n\n") * 10_001
+    # Given 100,001 fields split into 200,002 chunks below the normal byte ceiling.
+    chunks = ("da", "ta:\n\n") * 100_001
 
-    # When the stream exceeds the normal 10,000-field policy.
+    # When the stream exceeds the normal 100,000-field policy.
     with pytest.raises(SSEStreamLimitExceeded, match="events"):
         await _collect(
             chunks,
