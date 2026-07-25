@@ -39,11 +39,14 @@ class SSEStreamCapacityExceeded(Exception):
         return "response stream capacity is exhausted"
 
 
+# Sol/OpenCode tool streams often emit one SSE event per tiny argument fragment.
+# 10k events was too low for large patches (SSEStreamLimitExceeded mid-tool →
+# client "Patch failed" / Expected 'id' to be a string on incomplete state).
 DEFAULT_SSE_STREAM_POLICY: Final = SSEStreamPolicy(
-    max_bytes=16 * 1024 * 1024,
-    max_events=10_000,
-    idle_timeout_seconds=30.0,
-    total_timeout_seconds=900.0,
+    max_bytes=64 * 1024 * 1024,
+    max_events=100_000,
+    idle_timeout_seconds=120.0,
+    total_timeout_seconds=1800.0,
 )
 DEFAULT_SSE_STREAM_CAPACITY: Final = anyio.CapacityLimiter(64)
 SSE_TERMINAL_RESYNC: Final = "\n\n"
