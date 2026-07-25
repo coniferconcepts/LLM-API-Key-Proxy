@@ -1069,13 +1069,15 @@ class RotatingClient:
                         json_buffer = ""
 
                     # Convert chunk to dict, handling both litellm.ModelResponse and raw dicts
-                    if hasattr(chunk, "dict"):
-                        chunk_dict = chunk.dict()
-                    elif hasattr(chunk, "model_dump"):
+                    # Prefer model_dump (pydantic v2) so nested tool_calls stay plain JSON.
+                    if hasattr(chunk, "model_dump"):
                         chunk_dict = chunk.model_dump()
+                    elif hasattr(chunk, "dict"):
+                        chunk_dict = chunk.dict()
                     else:
                         chunk_dict = chunk
 
+                    # OpenCode AI SDK rejects null tool_call id / function.name on open.
                     chunk_dict = stream_normalizer.normalize(chunk_dict)
 
                     # === FINISH_REASON LOGIC ===
