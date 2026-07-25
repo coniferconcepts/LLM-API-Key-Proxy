@@ -2,7 +2,6 @@ import importlib
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -136,3 +135,51 @@ def test_sanitize_request_payload_keeps_thinking_for_opencode_go_non_tool_reques
     sanitized = sanitize_request_payload(payload, payload["model"])
 
     assert sanitized["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+
+
+def test_sanitize_strips_user_for_openai_when_local_api_base(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:2455/v1")
+    payload = {
+        "model": "openai/gpt-5.6-sol",
+        "messages": [{"role": "user", "content": "hi"}],
+        "user": "opencode-session",
+        "service_tier": "auto",
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "echo", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+
+    sanitized = sanitize_request_payload(payload, payload["model"])
+
+    assert "user" not in sanitized
+    assert "service_tier" not in sanitized
+    assert sanitized["tools"]
+
+
+def test_sanitize_keeps_user_for_openai_without_local_api_base(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    payload = {
+        "model": "openai/gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "user": "platform-user",
+    }
+
+    sanitized = sanitize_request_payload(payload, payload["model"])
+
+    assert sanitized["user"] == "platform-user"
+
+
+def test_sanitize_keeps_user_for_non_openai_with_local_api_base(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:2455/v1")
+    payload = {
+        "model": "ollama_cloud/kimi-k2.6",
+        "messages": [{"role": "user", "content": "hi"}],
+        "user": "keep-me",
+    }
+
+    sanitized = sanitize_request_payload(payload, payload["model"])
+
+    assert sanitized["user"] == "keep-me"

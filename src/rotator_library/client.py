@@ -2378,9 +2378,10 @@ class RotatingClient:
                                     current_cred, model, classified_error
                                 )
                                 lib_logger.warning(
-                                    "Streaming credential attempt failed category=%s status=%s; rotating.",
+                                    "Streaming credential attempt failed category=%s status=%s detail=%s; rotating.",
                                     classified_error.error_type,
                                     classified_error.status_code,
+                                    (error_message or "")[:240],
                                 )
                                 break
 
@@ -2453,10 +2454,14 @@ class RotatingClient:
                                     current_cred, classified_error, error_message
                                 )
 
+                                # Keep a short sanitized reason for invalid_request diagnosis
+                                # (failure_log.v2 no longer stores full error_message).
+                                safe_detail = (error_message or "")[:240]
                                 lib_logger.warning(
-                                    "Streaming credential attempt failed category=%s status=%s",
+                                    "Streaming credential attempt failed category=%s status=%s detail=%s",
                                     classified_error.error_type,
                                     classified_error.status_code,
+                                    safe_detail,
                                 )
 
                                 # Check if this error should trigger rotation
@@ -2761,9 +2766,10 @@ class RotatingClient:
                             )
 
                             lib_logger.warning(
-                                "Streaming credential attempt failed category=%s status=%s",
+                                "Streaming credential attempt failed category=%s status=%s detail=%s",
                                 classified_error.error_type,
                                 classified_error.status_code,
+                                (error_message_text or "")[:240],
                             )
 
                             # Handle rate limits with cooldown (exclude quota_exceeded)
