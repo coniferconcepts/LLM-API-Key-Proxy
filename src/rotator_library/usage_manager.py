@@ -8,7 +8,7 @@ import time
 import logging
 import asyncio
 import random
-from datetime import date, datetime, timezone, time as dt_time
+from datetime import datetime, timezone, time as dt_time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import aiofiles
@@ -1476,7 +1476,9 @@ class UsageManager:
         """Project fair-cycle credential lists to non-secret fingerprints."""
 
         if isinstance(value, dict):
-            return {key: self._safe_cycle_state_for_persistence(item) for key, item in value.items()}
+            return {
+                key: self._safe_cycle_state_for_persistence(item) for key, item in value.items()
+            }
         if isinstance(value, list):
             return [_credential_fingerprint(str(item)) for item in value]
         if isinstance(value, set):
@@ -2063,6 +2065,7 @@ class UsageManager:
                     "lock": asyncio.Lock(),
                     "condition": asyncio.Condition(),
                     "models_in_use": {},  # Dict[model_name, concurrent_count]
+                    "waiters": 0,
                 }
 
     def _select_weighted_random(self, candidates: List[tuple], tolerance: float) -> str:
@@ -2099,15 +2102,6 @@ class UsageManager:
         for credential, usage in candidates:
             weight = (max_usage - usage) + tolerance + 1
             weights.append(weight)
-
-        # Log weight distribution for debugging
-        if lib_logger.isEnabledFor(logging.DEBUG):
-            total_weight = sum(weights)
-            weight_info = ", ".join(
-                f"{mask_credential(cred)}: w={w:.1f} ({w / total_weight * 100:.1f}%)"
-                for (cred, _), w in zip(candidates, weights)
-            )
-            # lib_logger.debug(f"Weighted selection candidates: {weight_info}")
 
         # Random selection with weights
         selected_credential = random.choices(
@@ -2370,6 +2364,11 @@ class UsageManager:
                 best_priority_keys = priority_groups[best_priority]
                 best_wait_key = min(best_priority_keys, key=lambda x: x[1])[0]
                 wait_condition = self.key_states[best_wait_key]["condition"]
+                wait_provider = model.split("/")[0] if "/" in model else ""
+                wait_rotation_mode = self._get_rotation_mode(wait_provider)
+                wait_capacity = max_concurrent * self._get_priority_multiplier(
+                    wait_provider, best_priority, wait_rotation_mode
+                )
 
                 lib_logger.info(
                     f"All Priority-{best_priority} keys are busy. Waiting for highest priority credential to become available..."
@@ -2557,18 +2556,34 @@ class UsageManager:
                 # Wait on the condition of the key with the lowest current usage.
                 best_wait_key = min(all_potential_keys, key=lambda x: x[1])[0]
                 wait_condition = self.key_states[best_wait_key]["condition"]
+                wait_capacity = effective_max_concurrent
 
+            wait_state = self.key_states[best_wait_key]
+            wait_state["waiters"] = wait_state.get("waiters", 0) + 1
+            lib_logger.info(
+                "Credential admission state",
+                extra={
+                    "active": wait_state["models_in_use"].get(model, 0),
+                    "waiting": wait_state["waiters"],
+                    "capacity": wait_capacity,
+                },
+            )
             try:
-                async with wait_condition:
-                    remaining_budget = acquisition_deadline - time.time()
-                    if remaining_budget <= 0:
-                        break  # Exit if the budget has already been exceeded.
-                    # Wait for a notification, but no longer than the remaining budget or 1 second.
-                    await asyncio.wait_for(wait_condition.wait(), timeout=min(1, remaining_budget))
-                lib_logger.info("Notified that a key was released. Re-evaluating...")
-            except asyncio.TimeoutError:
-                # This is not an error, just a timeout for the wait. The main loop will re-evaluate.
-                lib_logger.info("Wait timed out. Re-evaluating for any available key.")
+                try:
+                    async with wait_condition:
+                        remaining_budget = acquisition_deadline - time.time()
+                        if remaining_budget <= 0:
+                            break  # Exit if the budget has already been exceeded.
+                        # Wait for a notification, but no longer than the remaining budget or 1 second.
+                        await asyncio.wait_for(
+                            wait_condition.wait(), timeout=min(1, remaining_budget)
+                        )
+                    lib_logger.info("Notified that a key was released. Re-evaluating...")
+                except asyncio.TimeoutError:
+                    # This is not an error, just a timeout for the wait. The main loop will re-evaluate.
+                    lib_logger.info("Wait timed out. Re-evaluating for any available key.")
+            finally:
+                wait_state["waiters"] -= 1
 
         diagnostics = {
             "model": model,
@@ -2603,8 +2618,22 @@ class UsageManager:
             diagnostics=diagnostics,
         )
 
-    async def release_key(self, key: str, model: str):
-        """Releases a key's lock for a specific model and notifies waiting tasks."""
+    async def release_key(self, key: str, model: str) -> None:
+        """Release a permit completely before propagating caller cancellation."""
+        release_task = asyncio.create_task(self._release_key_once(key, model))
+        pending_cancellation: asyncio.CancelledError | None = None
+
+        while not release_task.done():
+            try:
+                await asyncio.shield(release_task)
+            except asyncio.CancelledError as exc:
+                pending_cancellation = exc
+
+        release_task.result()
+        if pending_cancellation is not None:
+            raise pending_cancellation
+
+    async def _release_key_once(self, key: str, model: str) -> None:
         if key not in self.key_states:
             return
 
