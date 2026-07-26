@@ -287,11 +287,43 @@ async def test_many_tiny_fragments_cannot_turn_event_bound_into_byte_only_bound(
     chunks = ("da", "ta:\n\n") * 100_001
 
     # When the stream exceeds the normal 100,000-field policy.
-    with pytest.raises(SSEStreamLimitExceeded, match="events"):
+    with pytest.raises(SSEStreamLimitExceeded, match="events") as raised:
         await _collect(
             chunks,
             DEFAULT_SSE_STREAM_POLICY,
         )
+
+    # Then the one-field overflow retains its event-boundary classification.
+    assert raised.value.boundary == "events"
+
+
+@pytest.mark.asyncio
+async def test_medium_fragmented_stream_below_default_bounds_is_forwarded() -> None:
+    # Given 50,000 valid SSE fields split in two below the 100,000-field / 64 MiB defaults.
+    field_count = 50_000
+    chunks = ("da", "ta: fragment\n\n") * field_count
+
+    # When the default stream boundary consumes all fragments.
+    accepted = await _collect(chunks, DEFAULT_SSE_STREAM_POLICY)
+
+    # Then it forwards every fragment in order without misclassifying normal tool traffic.
+    assert len(accepted) == field_count * 2
+    assert accepted[:2] == ["da", "ta: fragment\n\n"]
+    assert accepted[-2:] == ["da", "ta: fragment\n\n"]
+
+
+@pytest.mark.asyncio
+async def test_one_byte_over_limit_reports_byte_boundary() -> None:
+    # Given one valid SSE field that is exactly one byte larger than the byte policy.
+    chunk = "data: x\n\n"
+    policy = _policy(max_events=1, max_bytes=len(chunk.encode("utf-8")) - 1)
+
+    # When the bounded stream receives it.
+    with pytest.raises(SSEStreamLimitExceeded, match="bytes") as raised:
+        await _collect((chunk,), policy)
+
+    # Then its public error is classified as the byte boundary, not the event boundary.
+    assert raised.value.boundary == "bytes"
 
 
 @pytest.mark.asyncio

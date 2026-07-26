@@ -13,11 +13,14 @@ from rotator_library.openai_stream_normalize import (
 
 
 class _UsageManager:
+    def __init__(self) -> None:
+        self.released: list[tuple[str, str]] = []
+
     async def record_success(self, _key: str, _model: str) -> None:
         return
 
-    async def release_key(self, _key: str, _model: str) -> None:
-        return
+    async def release_key(self, key: str, model: str) -> None:
+        self.released.append((key, model))
 
 
 async def _upstream_chunks() -> AsyncGenerator[JsonObject, None]:
@@ -161,6 +164,150 @@ async def test_safe_streaming_wrapper_assigns_stable_ids_when_tool_call_ids_are_
         payload = json.dumps(event)
         assert '"name": null' not in payload
         assert '"id": null' not in payload
+
+
+@pytest.mark.asyncio
+async def test_safe_streaming_wrapper_serializes_multi_index_tool_state_without_null_names() -> (
+    None
+):
+    # Given two tool indexes with explicit null names followed by argument-only continuations.
+    async def source() -> AsyncGenerator[JsonObject, None]:
+        yield {
+            "id": None,
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": None,
+                                "function": {"name": "read", "arguments": ""},
+                            },
+                            {
+                                "index": 1,
+                                "id": None,
+                                "function": {"name": "write", "arguments": ""},
+                            },
+                        ]
+                    }
+                }
+            ],
+        }
+        yield {
+            "id": None,
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "id": None, "function": {"arguments": "{"}},
+                            {
+                                "index": 1,
+                                "id": None,
+                                "function": {"name": None, "arguments": "["},
+                            },
+                        ]
+                    }
+                }
+            ],
+        }
+
+    rotating_client = object.__new__(RotatingClient)
+    rotating_client.usage_manager = _UsageManager()
+
+    # When the real streaming wrapper emits serialized SSE records.
+    serialized = [
+        event
+        async for event in rotating_client._safe_streaming_wrapper(
+            source(),
+            "credential",
+            "provider/model",
+        )
+        if event != "data: [DONE]\n\n"
+    ]
+
+    # Then neither explicit null is serialized and each index retains its own identity and name.
+    assert all('"name":null' not in event.replace(" ", "") for event in serialized)
+    first = json.loads(serialized[0].removeprefix("data: "))["choices"][0]["delta"]["tool_calls"]
+    continuation = json.loads(serialized[1].removeprefix("data: "))["choices"][0]["delta"][
+        "tool_calls"
+    ]
+    assert first[0]["id"] != first[1]["id"]
+    assert continuation[0]["id"] == first[0]["id"]
+    assert continuation[1]["id"] == first[1]["id"]
+    assert continuation[0]["function"]["name"] == "read"
+    assert continuation[1]["function"]["name"] == "write"
+
+
+@pytest.mark.asyncio
+async def test_safe_streaming_wrapper_releases_key_before_done() -> None:
+    # Given a normally completing upstream stream.
+    async def source() -> AsyncGenerator[JsonObject, None]:
+        yield {"id": "chatcmpl_done", "choices": [{"delta": {"content": "done"}}]}
+
+    usage_manager = _UsageManager()
+    rotating_client = object.__new__(RotatingClient)
+    rotating_client.usage_manager = usage_manager
+
+    # When the wrapper drains it to its terminal SSE record.
+    events = [
+        event
+        async for event in rotating_client._safe_streaming_wrapper(
+            source(),
+            "credential",
+            "provider/model",
+        )
+    ]
+
+    # Then the key is released and the public stream terminates with DONE.
+    assert usage_manager.released == [("credential", "provider/model")]
+    assert events[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_safe_streaming_wrapper_releases_key_after_upstream_exception() -> None:
+    # Given an upstream stream that fails after its first response.
+    async def source() -> AsyncGenerator[JsonObject, None]:
+        yield {"id": "chatcmpl_error", "choices": [{"delta": {"content": "before"}}]}
+        raise RuntimeError("adversarial upstream failure")
+
+    usage_manager = _UsageManager()
+    rotating_client = object.__new__(RotatingClient)
+    rotating_client.usage_manager = usage_manager
+
+    # When the wrapper propagates the upstream error.
+    with pytest.raises(RuntimeError, match="adversarial upstream failure"):
+        _ = [
+            event
+            async for event in rotating_client._safe_streaming_wrapper(
+                source(),
+                "credential",
+                "provider/model",
+            )
+        ]
+
+    # Then the key is still released without a terminal DONE record.
+    assert usage_manager.released == [("credential", "provider/model")]
+
+
+@pytest.mark.asyncio
+async def test_safe_streaming_wrapper_releases_key_after_consumer_cancellation() -> None:
+    # Given a stream whose consumer stops after the first response.
+    async def source() -> AsyncGenerator[JsonObject, None]:
+        while True:
+            yield {"id": "chatcmpl_cancel", "choices": [{"delta": {"content": "partial"}}]}
+
+    usage_manager = _UsageManager()
+    rotating_client = object.__new__(RotatingClient)
+    rotating_client.usage_manager = usage_manager
+    wrapped = rotating_client._safe_streaming_wrapper(source(), "credential", "provider/model")
+
+    # When the consumer explicitly cancels the wrapper.
+    first = await wrapped.__anext__()
+    await wrapped.aclose()
+
+    # Then no terminal record is sent and the key is released for the next stream.
+    assert first.startswith("data: ")
+    assert usage_manager.released == [("credential", "provider/model")]
 
 
 def test_normalizer_reuses_synthetic_id_for_continuation_delta() -> None:
