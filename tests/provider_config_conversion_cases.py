@@ -3,6 +3,55 @@ import os
 from rotator_library.provider_config import ProviderConfig, discover_api_keys_from_env
 
 
+def test_openai_local_api_base_uses_bare_catalog_model_on_wire(monkeypatch):
+    """Route identity openai/<id> must not appear as the JSON model for local bases."""
+    monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:2455/v1")
+
+    config = ProviderConfig()
+    result = config.convert_for_litellm(
+        model="openai/gpt-5.6-sol",
+        api_key="sk-clb-test",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert result["model"] == "gpt-5.6-sol"
+    assert not str(result["model"]).startswith("openai/")
+    assert result["custom_llm_provider"] == "openai"
+    assert result["api_base"] == "http://127.0.0.1:2455/v1"
+    assert result["base_url"] == "http://127.0.0.1:2455/v1"
+
+
+def test_openai_catalog_model_id_strips_only_openai_route_prefix():
+    assert ProviderConfig.openai_catalog_model_id("openai/gpt-5.6-sol") == "gpt-5.6-sol"
+    assert ProviderConfig.openai_catalog_model_id("gpt-5.6-sol") == "gpt-5.6-sol"
+    assert (
+        ProviderConfig.openai_catalog_model_id("openrouter/x-ai/grok-4.3")
+        == "openrouter/x-ai/grok-4.3"
+    )
+
+
+def test_openai_without_local_api_base_keeps_qualified_model(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+
+    config = ProviderConfig()
+    result = config.convert_for_litellm(model="openai/gpt-5.6-sol")
+
+    assert result["model"] == "openai/gpt-5.6-sol"
+    assert "api_base" not in result
+
+
+def test_non_openai_local_api_base_is_unchanged_by_openai_bare_wire_rule(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:2455/v1")
+    monkeypatch.setenv("OPENROUTER_ZDR_API_BASE", "https://openrouter.ai/api/v1")
+
+    config = ProviderConfig()
+    result = config.convert_for_litellm(model="openrouter_zdr/x-ai/grok-4.3")
+
+    # openrouter stays vendor-qualified; openai bare-wire rule must not strip it
+    assert "openrouter" in result["model"] or "x-ai" in result["model"]
+    assert result["model"] != "gpt-5.6-sol"
+
+
 def test_fireworks_v2_api_base_rewrites_fireworks_models(monkeypatch):
     monkeypatch.setenv("FIREWORKS_V2_API_BASE", "https://api.fireworks.ai/inference/v1")
 

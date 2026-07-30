@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -17,6 +16,17 @@ RotatingClient = getattr(client_module, "RotatingClient")
 _merge_openrouter_extra_headers = getattr(client_module, "_merge_openrouter_extra_headers")
 RoutingPolicy = getattr(routing_policy_module, "RoutingPolicy")
 RoutingPolicyError = getattr(routing_policy_module, "RoutingPolicyError")
+
+
+def test_openrouter_header_merge_has_dedicated_module_boundary():
+    # Given the public helper exposed through the client module.
+    helper = _merge_openrouter_extra_headers
+
+    # When its implementation owner is inspected.
+    owner = helper.__module__
+
+    # Then header adaptation remains outside the oversized client module.
+    assert owner == "rotator_library.openrouter_headers"
 
 
 def test_client_helper_rewrites_weighted_router_model():

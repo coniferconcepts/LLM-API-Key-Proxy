@@ -57,7 +57,7 @@ _frozen_local_transport_safe_mode: bool | None = None
 def _local_transport_safe_mode_enabled() -> bool:
     if _frozen_local_transport_safe_mode is not None:
         return _frozen_local_transport_safe_mode
-    return _env_flag_enabled("MIRROWEL_LOCAL_TRANSPORT_SAFE_MODE")
+    return bool(_env_flag_enabled("MIRROWEL_LOCAL_TRANSPORT_SAFE_MODE"))
 
 
 _tui_network_bind_approval = None
@@ -187,6 +187,16 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
 print("  → Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from rotator_library import RotatingClient
+    from rotator_library.bounded_campaign import (
+        ATTEMPT_HEADER,
+        BoundedAttemptGuard,
+        BoundedAuthorization,
+        BoundedCampaignError,
+        DurableReservationLedger,
+        INTERNAL_CAPABILITY_HEADER,
+        INTERNAL_ENTRY_HEADER,
+        validate_internal_request,
+    )
     from rotator_library.credential_manager import CredentialManager
     from rotator_library.provider_config import (
         discover_api_keys_from_env,
@@ -199,8 +209,10 @@ with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from proxy_app.safe_errors import (
         SafeUnhandledErrorMiddleware,
         anthropic_error_content,
+        handle_credential_failure,
         log_safe_exception,
         public_error_detail,
+        terminal_completion_error_response,
     )
     from proxy_app.anthropic_stream import (
         bounded_anthropic_sse_response as anthropic_streaming_response_wrapper,
@@ -936,6 +948,28 @@ async def chat_completions(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON in request body.")
 
+        normalized_headers = {name.lower(): value for name, value in request.headers.items()}
+        try:
+            bounded_authorization = validate_internal_request(
+                normalized_headers,
+                request_data,
+                method="POST",
+                path="/v1/chat/completions",
+            )
+        except BoundedCampaignError:
+            raise HTTPException(status_code=403, detail="bounded_request_rejected")
+        safe_headers = {
+            name: value
+            for name, value in request.headers.items()
+            if name.lower()
+            not in {INTERNAL_ENTRY_HEADER, INTERNAL_CAPABILITY_HEADER, ATTEMPT_HEADER}
+        }
+
+        pre_request_callback = None
+        if isinstance(bounded_authorization, BoundedAuthorization):
+            ledger = DurableReservationLedger.from_environment()
+            pre_request_callback = BoundedAttemptGuard(bounded_authorization, ledger)
+
         _ensure_local_transport_configuration_current()
         if _local_transport_runtime_policy.enabled:
             model = request_data.get("model")
@@ -977,7 +1011,7 @@ async def chat_completions(
 
         # If raw logging is enabled, capture the unmodified request data.
         if raw_logger:
-            raw_logger.log_request(headers=request.headers, body=request_data)
+            raw_logger.log_request(headers=safe_headers, body=request_data)
 
         # Extract and log specific reasoning parameters for monitoring.
         model = request_data.get("model")
@@ -1004,20 +1038,31 @@ async def chat_completions(
         # Log basic request info to console (this is a separate, simpler logger).
         log_request_to_console(
             url=str(request.url),
-            headers=dict(request.headers),
+            headers=safe_headers,
             client_info=(request.client.host, request.client.port),
             request_data=request_data,
         )
         is_streaming = request_data.get("stream", False)
 
         if is_streaming:
-            response_generator = client.acompletion(request=request, **request_data)
+            response_generator = client.acompletion(
+                request=request,
+                pre_request_callback=pre_request_callback,
+                **request_data,
+            )
             return StreamingResponse(
                 streaming_response_wrapper(request, request_data, response_generator, raw_logger),
                 media_type="text/event-stream",
             )
         else:
-            response = await client.acompletion(request=request, **request_data)
+            response = await client.acompletion(
+                request=request,
+                pre_request_callback=pre_request_callback,
+                **request_data,
+            )
+            terminal_error = terminal_completion_error_response(response)
+            if terminal_error is not None:
+                return terminal_error
             if raw_logger:
                 # Assuming response has status_code and headers attributes
                 # This might need adjustment based on the actual response object
@@ -1039,13 +1084,7 @@ async def chat_completions(
     except HTTPException:
         raise
     except NoAvailableKeysError as e:
-        raise _safe_http_exception(
-            503,
-            "OpenAI credential acquisition",
-            e,
-            raw_logger=raw_logger,
-            code="proxy_busy",
-        )
+        return handle_credential_failure(e, raw_logger)
     except litellm.AuthenticationError as e:
         raise _safe_http_exception(401, "OpenAI authentication", e, raw_logger=raw_logger)
     except litellm.RateLimitError as e:

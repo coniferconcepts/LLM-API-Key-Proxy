@@ -3,14 +3,12 @@
 
 import json
 import os
-import hashlib
 import time
 import logging
 import asyncio
-import random
 from datetime import datetime, timezone, time as dt_time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 import aiofiles
 import litellm
 
@@ -18,6 +16,13 @@ from .error_handler import ClassifiedError, NoAvailableKeysError, mask_credentia
 from .providers import PROVIDER_PLUGINS
 from .utils.resilient_io import ResilientStateWriter
 from .utils.paths import get_data_file
+from .usage_persistence import (
+    _credential_fingerprint as _credential_fingerprint,
+    add_readable_timestamps,
+    safe_usage_data_for_persistence,
+)
+from .usage_provider_state import provider_from_credential
+from .usage_selection import select_weighted_random
 from .config import (
     DEFAULT_FAIR_CYCLE_DURATION,
     DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD,
@@ -34,17 +39,6 @@ lib_logger = logging.getLogger("rotator_library")
 lib_logger.propagate = False
 if not lib_logger.handlers:
     lib_logger.addHandler(logging.NullHandler())
-
-
-def _credential_fingerprint(credential: str) -> str:
-    """Return a stable non-secret identifier for persisted usage state.
-
-    Sixteen SHA-256 hex characters provide a 64-bit identifier. That is not a
-    secret, but it is sufficient to avoid practical collisions for local usage
-    accounting while keeping raw provider credentials out of persisted state.
-    """
-
-    return f"credential_sha256:{hashlib.sha256(credential.encode('utf-8')).hexdigest()[:16]}"
 
 
 class UsageManager:
@@ -175,6 +169,7 @@ class UsageManager:
         # Resilient writer for usage data persistence
         self._state_writer = ResilientStateWriter(file_path, lib_logger)
 
+        self.daily_reset_time_utc: dt_time | None
         if daily_reset_time_utc:
             hour, minute = map(int, daily_reset_time_utc.split(":"))
             self.daily_reset_time_utc = dt_time(hour=hour, minute=minute, tzinfo=timezone.utc)
@@ -239,7 +234,8 @@ class UsageManager:
         Returns:
             Duration in seconds (default 86400 = 24 hours)
         """
-        return self.fair_cycle_duration.get(provider, DEFAULT_FAIR_CYCLE_DURATION)
+        duration: int = self.fair_cycle_duration.get(provider, DEFAULT_FAIR_CYCLE_DURATION)
+        return duration
 
     def _get_exhaustion_cooldown_threshold(self, provider: str) -> int:
         """
@@ -250,9 +246,10 @@ class UsageManager:
         Returns:
             Threshold in seconds (default 300 = 5 minutes)
         """
-        return self.exhaustion_cooldown_threshold.get(
+        threshold: int = self.exhaustion_cooldown_threshold.get(
             provider, DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD
         )
+        return threshold
 
     # =========================================================================
     # CUSTOM CAPS HELPERS
@@ -341,7 +338,8 @@ class UsageManager:
         """
         plugin_instance = self._get_provider_instance(provider)
         if plugin_instance and hasattr(plugin_instance, "get_model_quota_group"):
-            return plugin_instance.get_model_quota_group(model)
+            group = plugin_instance.get_model_quota_group(model)
+            return group if isinstance(group, str) else None
         return None
 
     def _resolve_custom_cap_max(
@@ -467,6 +465,8 @@ class UsageManager:
             return False
 
         # Get model data for actual max and timing info
+        if self._usage_data is None:
+            return False
         key_data = self._usage_data.get(credential, {})
         model_data = key_data.get("models", {}).get(model, {})
         actual_max = model_data.get("quota_max_requests")
@@ -582,7 +582,7 @@ class UsageManager:
         plugin_instance = self._get_provider_instance(provider)
         if plugin_instance and hasattr(plugin_instance, "get_credential_priority"):
             priority = plugin_instance.get_credential_priority(credential)
-            if priority is not None:
+            if isinstance(priority, int):
                 return priority
         return 999
 
@@ -669,7 +669,7 @@ class UsageManager:
         if cycle_data is None:
             return False
         cycle_started = cycle_data.get("cycle_started_at")
-        if cycle_started is None:
+        if not isinstance(cycle_started, (int, float)):
             return False
         duration = self._get_fair_cycle_duration(provider)
         return time.time() >= cycle_started + duration
@@ -820,86 +820,8 @@ class UsageManager:
         return 1
 
     def _get_provider_from_credential(self, credential: str) -> Optional[str]:
-        """
-        Extract provider name from credential path or identifier.
-
-        Supports multiple credential formats:
-        - OAuth: "oauth_creds/antigravity_oauth_15.json" -> "antigravity"
-        - OAuth: "C:\\...\\oauth_creds\\gemini_cli_oauth_1.json" -> "gemini_cli"
-        - OAuth filename only: "antigravity_oauth_1.json" -> "antigravity"
-        - API key style: extracted from model names in usage data (e.g., "firmware/model" -> "firmware")
-
-        Args:
-            credential: The credential identifier (path or key)
-
-        Returns:
-            Provider name string or None if cannot be determined
-        """
-        import re
-
-        # Pattern: env:// URI format (e.g., "env://antigravity/1" -> "antigravity")
-        if credential.startswith("env://"):
-            parts = credential[6:].split("/")  # Remove "env://" prefix
-            if parts and parts[0]:
-                return parts[0].lower()
-            # Malformed env:// URI (empty provider name)
-            lib_logger.warning(f"Malformed env:// credential URI: {credential}")
-            return None
-
-        # Normalize path separators
-        normalized = credential.replace("\\", "/")
-
-        # Pattern: path ending with {provider}_oauth_{number}.json
-        match = re.search(r"/([a-z_]+)_oauth_\d+\.json$", normalized, re.IGNORECASE)
-        if match:
-            return match.group(1).lower()
-
-        # Pattern: oauth_creds/{provider}_...
-        match = re.search(r"oauth_creds/([a-z_]+)_", normalized, re.IGNORECASE)
-        if match:
-            return match.group(1).lower()
-
-        # Pattern: filename only {provider}_oauth_{number}.json (no path)
-        match = re.match(r"([a-z_]+)_oauth_\d+\.json$", normalized, re.IGNORECASE)
-        if match:
-            return match.group(1).lower()
-
-        # Pattern: API key prefixes for specific providers
-        # These are raw API keys with recognizable prefixes
-        api_key_prefixes = {
-            "sk-nano-": "nanogpt",
-            "sk-or-": "openrouter",
-            "sk-ant-": "anthropic",
-        }
-        for prefix, provider in api_key_prefixes.items():
-            if credential.startswith(prefix):
-                return provider
-
-        # Fallback: For raw API keys, extract provider from model names in usage data
-        # This handles providers like firmware, chutes, nanogpt that use credential-level quota
-        if self._usage_data and credential in self._usage_data:
-            cred_data = self._usage_data[credential]
-
-            # Check "models" section first (for per_model mode and quota tracking)
-            models_data = cred_data.get("models", {})
-            if models_data:
-                # Get first model name and extract provider prefix
-                first_model = next(iter(models_data.keys()), None)
-                if first_model and "/" in first_model:
-                    provider = first_model.split("/")[0].lower()
-                    return provider
-
-            # Fallback to "daily" section (legacy structure)
-            daily_data = cred_data.get("daily", {})
-            daily_models = daily_data.get("models", {})
-            if daily_models:
-                # Get first model name and extract provider prefix
-                first_model = next(iter(daily_models.keys()), None)
-                if first_model and "/" in first_model:
-                    provider = first_model.split("/")[0].lower()
-                    return provider
-
-        return None
+        provider = provider_from_credential(credential, self._usage_data)
+        return provider if isinstance(provider, str) else None
 
     def _get_provider_instance(self, provider: str) -> Optional[Any]:
         """
@@ -940,10 +862,13 @@ class UsageManager:
             or None to use default daily reset.
         """
         provider = self._get_provider_from_credential(credential)
+        if provider is None:
+            return None
         plugin_instance = self._get_provider_instance(provider)
 
         if plugin_instance and hasattr(plugin_instance, "get_usage_reset_config"):
-            return plugin_instance.get_usage_reset_config(credential)
+            config = plugin_instance.get_usage_reset_config(credential)
+            return config if isinstance(config, dict) else None
 
         return None
 
@@ -972,10 +897,13 @@ class UsageManager:
             Group name (e.g., "claude") or None if not grouped
         """
         provider = self._get_provider_from_credential(credential)
+        if provider is None:
+            return None
         plugin_instance = self._get_provider_instance(provider)
 
         if plugin_instance and hasattr(plugin_instance, "get_model_quota_group"):
-            return plugin_instance.get_model_quota_group(model)
+            group = plugin_instance.get_model_quota_group(model)
+            return group if isinstance(group, str) else None
 
         return None
 
@@ -996,6 +924,8 @@ class UsageManager:
             (e.g., ["antigravity/claude-sonnet-4.5", "antigravity/claude-opus-4.5"])
         """
         provider = self._get_provider_from_credential(credential)
+        if provider is None:
+            return []
         plugin_instance = self._get_provider_instance(provider)
 
         if plugin_instance and hasattr(plugin_instance, "get_models_in_quota_group"):
@@ -1030,10 +960,13 @@ class UsageManager:
             Weight multiplier (default 1 if not configured)
         """
         provider = self._get_provider_from_credential(credential)
+        if provider is None:
+            return 1
         plugin_instance = self._get_provider_instance(provider)
 
         if plugin_instance and hasattr(plugin_instance, "get_model_usage_weight"):
-            return plugin_instance.get_model_usage_weight(model)
+            weight = plugin_instance.get_model_usage_weight(model)
+            return weight if isinstance(weight, int) else 1
 
         return 1
 
@@ -1052,10 +985,13 @@ class UsageManager:
             Normalized model name (provider prefix preserved if present)
         """
         provider = self._get_provider_from_credential(credential)
+        if provider is None:
+            return model
         plugin_instance = self._get_provider_instance(provider)
 
         if plugin_instance and hasattr(plugin_instance, "normalize_model_for_tracking"):
-            return plugin_instance.normalize_model_for_tracking(model)
+            normalized = plugin_instance.normalize_model_for_tracking(model)
+            return normalized if isinstance(normalized, str) else model
 
         return model
 
@@ -1172,15 +1108,19 @@ class UsageManager:
             Field name string (e.g., "5h_window", "weekly", "daily")
         """
         config = self._get_usage_reset_config(credential)
-        if config and "field_name" in config:
-            return config["field_name"]
+        field_name = config.get("field_name") if config else None
+        if isinstance(field_name, str):
+            return field_name
 
         # Check provider default
         provider = self._get_provider_from_credential(credential)
+        if provider is None:
+            return "daily"
         plugin_instance = self._get_provider_instance(provider)
 
         if plugin_instance and hasattr(plugin_instance, "get_default_usage_field_name"):
-            return plugin_instance.get_default_usage_field_name()
+            field_name = plugin_instance.get_default_usage_field_name()
+            return field_name if isinstance(field_name, str) else "daily"
 
         return "daily"
 
@@ -1213,69 +1153,15 @@ class UsageManager:
 
         if reset_mode == "per_model":
             # New per-model structure: key_data["models"][model][field]
-            return key_data.get("models", {}).get(model, {}).get(field, 0)
+            count = key_data.get("models", {}).get(model, {}).get(field, 0)
         else:
             # Legacy structure: key_data["daily"]["models"][model][field]
-            return key_data.get("daily", {}).get("models", {}).get(model, {}).get(field, 0)
+            count = key_data.get("daily", {}).get("models", {}).get(model, {}).get(field, 0)
+        return count if isinstance(count, int) else 0
 
     # =========================================================================
     # TIMESTAMP FORMATTING HELPERS
     # =========================================================================
-
-    def _format_timestamp_local(self, ts: Optional[float]) -> Optional[str]:
-        """
-        Format Unix timestamp as local time string with timezone offset.
-
-        Args:
-            ts: Unix timestamp or None
-
-        Returns:
-            Formatted string like "2025-12-07 14:30:17 +0100" or None
-        """
-        if ts is None:
-            return None
-        try:
-            dt = datetime.fromtimestamp(ts).astimezone()  # Local timezone
-            # Use UTC offset for conciseness (works on all platforms)
-            return dt.strftime("%Y-%m-%d %H:%M:%S %z")
-        except (OSError, ValueError, OverflowError):
-            return None
-
-    def _add_readable_timestamps(self, data: Dict) -> Dict:
-        """
-        Add human-readable timestamp fields to usage data before saving.
-
-        Adds 'window_started' and 'quota_resets' fields derived from
-        Unix timestamps for easier debugging and monitoring.
-
-        Args:
-            data: The usage data dict to enhance
-
-        Returns:
-            The same dict with readable timestamp fields added
-        """
-        for key, key_data in data.items():
-            # Handle per-model structure
-            models = key_data.get("models", {})
-            for model_name, model_stats in models.items():
-                if not isinstance(model_stats, dict):
-                    continue
-
-                # Add readable window start time
-                window_start = model_stats.get("window_start_ts")
-                if window_start:
-                    model_stats["window_started"] = self._format_timestamp_local(window_start)
-                elif "window_started" in model_stats:
-                    del model_stats["window_started"]
-
-                # Add readable reset time
-                quota_reset = model_stats.get("quota_reset_ts")
-                if quota_reset:
-                    model_stats["quota_resets"] = self._format_timestamp_local(quota_reset)
-                elif "quota_resets" in model_stats:
-                    del model_stats["quota_resets"]
-
-        return data
 
     def _sort_sequential(
         self,
@@ -1446,7 +1332,7 @@ class UsageManager:
 
         async with self._data_lock:
             # Add human-readable timestamp fields before saving
-            self._add_readable_timestamps(self._usage_data)
+            add_readable_timestamps(self._usage_data)
 
             # Persist fair cycle state (separate from credential data)
             if self._cycle_exhausted:
@@ -1459,31 +1345,12 @@ class UsageManager:
             # Runtime state keeps raw credential keys in memory so rotation
             # behavior is unchanged for this process, but disk state must not
             # persist provider secrets as JSON object keys.
-            self._state_writer.write(self._safe_usage_data_for_persistence(self._usage_data))
+            self._state_writer.write(safe_usage_data_for_persistence(self._usage_data))
 
     def _safe_usage_data_for_persistence(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Project usage data to a disk-safe shape without raw credential keys."""
-
-        safe: Dict[str, Any] = {}
-        for credential, credential_data in data.items():
-            if credential == "__fair_cycle__":
-                safe[credential] = self._safe_cycle_state_for_persistence(credential_data)
-            else:
-                safe[_credential_fingerprint(str(credential))] = credential_data
-        return safe
-
-    def _safe_cycle_state_for_persistence(self, value: Any) -> Any:
-        """Project fair-cycle credential lists to non-secret fingerprints."""
-
-        if isinstance(value, dict):
-            return {
-                key: self._safe_cycle_state_for_persistence(item) for key, item in value.items()
-            }
-        if isinstance(value, list):
-            return [_credential_fingerprint(str(item)) for item in value]
-        if isinstance(value, set):
-            return [_credential_fingerprint(str(item)) for item in sorted(value)]
-        return value
+        safe_data = safe_usage_data_for_persistence(data)
+        return safe_data if isinstance(safe_data, dict) else {}
 
     async def _get_usage_data_snapshot(self) -> Dict[str, Any]:
         """
@@ -1516,10 +1383,12 @@ class UsageManager:
         await self._lazy_init()
         now = time.time()
         available = []
+        usage_data = self._usage_data
+        assert usage_data is not None
 
         async with self._data_lock:
             for key in credentials:
-                key_data = self._usage_data.get(key, {})
+                key_data = usage_data.get(key, {})
 
                 # Skip if key-level cooldown is active
                 if (key_data.get("key_cooldown_until") or 0) > now:
@@ -1568,11 +1437,13 @@ class UsageManager:
         total = len(credentials)
         on_cooldown = 0
         not_on_cooldown = []
+        usage_data = self._usage_data
+        assert usage_data is not None
 
         # First pass: check cooldowns
         async with self._data_lock:
             for key in credentials:
-                key_data = self._usage_data.get(key, {})
+                key_data = usage_data.get(key, {})
 
                 # Check if key-level or model-level cooldown is active
                 normalized_model = self._normalize_model(key, model)
@@ -1634,10 +1505,12 @@ class UsageManager:
         await self._lazy_init()
         now = time.time()
         soonest_end = None
+        usage_data = self._usage_data
+        assert usage_data is not None
 
         async with self._data_lock:
             for key in credentials:
-                key_data = self._usage_data.get(key, {})
+                key_data = usage_data.get(key, {})
                 normalized_model = self._normalize_model(key, model)
 
                 # Check key-level cooldown
@@ -1784,9 +1657,9 @@ class UsageManager:
         quota_reset = model_data.get("quota_reset_ts")
         window_start = model_data.get("window_start_ts")
 
-        if quota_reset:
+        if isinstance(quota_reset, (int, float)) and quota_reset:
             return now_ts >= quota_reset
-        elif window_start:
+        if isinstance(window_start, (int, float)) and window_start:
             return now_ts >= window_start + window_seconds
         return False
 
@@ -1963,7 +1836,10 @@ class UsageManager:
                 pass
 
         # Determine the reset threshold for today
-        reset_threshold_today = datetime.combine(now_utc.date(), self.daily_reset_time_utc)
+        daily_reset_time = self.daily_reset_time_utc
+        if daily_reset_time is None:
+            return False
+        reset_threshold_today = datetime.combine(now_utc.date(), daily_reset_time)
 
         if not (last_reset_dt is None or last_reset_dt < reset_threshold_today <= now_utc):
             return False
@@ -2068,48 +1944,6 @@ class UsageManager:
                     "waiters": 0,
                 }
 
-    def _select_weighted_random(self, candidates: List[tuple], tolerance: float) -> str:
-        """
-        Selects a credential using weighted random selection based on usage counts.
-
-        Args:
-            candidates: List of (credential_id, usage_count) tuples
-            tolerance: Tolerance value for weight calculation
-
-        Returns:
-            Selected credential ID
-
-        Formula:
-            weight = (max_usage - credential_usage) + tolerance + 1
-
-        This formula ensures:
-            - Lower usage = higher weight = higher selection probability
-            - Tolerance adds variability: higher tolerance means more randomness
-            - The +1 ensures all credentials have at least some chance of selection
-        """
-        if not candidates:
-            raise ValueError("Cannot select from empty candidate list")
-
-        if len(candidates) == 1:
-            return candidates[0][0]
-
-        # Extract usage counts
-        usage_counts = [usage for _, usage in candidates]
-        max_usage = max(usage_counts)
-
-        # Calculate weights using the formula: (max - current) + tolerance + 1
-        weights = []
-        for credential, usage in candidates:
-            weight = (max_usage - usage) + tolerance + 1
-            weights.append(weight)
-
-        # Random selection with weights
-        selected_credential = random.choices(
-            [cred for cred, _ in candidates], weights=weights, k=1
-        )[0]
-
-        return selected_credential
-
     async def acquire_key(
         self,
         available_keys: List[str],
@@ -2150,6 +1984,8 @@ class UsageManager:
         await self._lazy_init()
         await self._reset_daily_stats_if_needed()
         self._initialize_key_states(available_keys)
+        usage_data = self._usage_data
+        assert usage_data is not None
 
         # Normalize model name for consistent cooldown lookup
         # (cooldowns are stored under normalized names by record_failure)
@@ -2163,6 +1999,9 @@ class UsageManager:
 
         # Use acquire_deadline for the acquisition loop if provided, otherwise use deadline
         acquisition_deadline = acquire_deadline if acquire_deadline is not None else deadline
+        failure_category: Literal["proxy_busy", "proxy_all_credentials_exhausted"] = (
+            "proxy_busy" if available_keys else "proxy_all_credentials_exhausted"
+        )
 
         # This loop continues as long as the acquisition deadline has not been met.
         while time.time() < acquisition_deadline:
@@ -2171,10 +2010,10 @@ class UsageManager:
             # Group credentials by priority level (if priorities provided)
             if credential_priorities:
                 # Group keys by priority level
-                priority_groups = {}
+                priority_groups: Dict[int, List[Tuple[str, int]]] = {}
                 async with self._data_lock:
                     for key in available_keys:
-                        key_data = self._usage_data.get(key, {})
+                        key_data = usage_data.get(key, {})
 
                         # Skip keys on cooldown (use normalized model for lookup)
                         if (key_data.get("key_cooldown_until") or 0) > now or (
@@ -2248,7 +2087,8 @@ class UsageManager:
                     effective_max_concurrent = max_concurrent * multiplier
 
                     # Within each priority group, use existing tier1/tier2 logic
-                    tier1_keys, tier2_keys = [], []
+                    tier1_keys: List[Tuple[str, int]] = []
+                    tier2_keys: List[Tuple[str, int]] = []
                     for key, usage_count in keys_in_priority:
                         key_state = self.key_states[key]
 
@@ -2271,12 +2111,12 @@ class UsageManager:
                         # Balanced mode with weighted randomness
                         selection_method = "weighted-random"
                         if tier1_keys:
-                            selected_key = self._select_weighted_random(
+                            selected_key = select_weighted_random(
                                 tier1_keys, self.rotation_tolerance
                             )
                             tier1_keys = [(k, u) for k, u in tier1_keys if k == selected_key]
                         if tier2_keys:
-                            selected_key = self._select_weighted_random(
+                            selected_key = select_weighted_random(
                                 tier2_keys, self.rotation_tolerance
                             )
                             tier2_keys = [(k, u) for k, u in tier2_keys if k == selected_key]
@@ -2330,6 +2170,7 @@ class UsageManager:
                     all_potential_keys.extend(keys_list)
 
                 if not all_potential_keys:
+                    failure_category = "proxy_all_credentials_exhausted"
                     # All credentials are on cooldown - check if waiting makes sense
                     soonest_end = await self.get_soonest_cooldown_end(available_keys, model)
 
@@ -2360,6 +2201,7 @@ class UsageManager:
                     continue
 
                 # Wait for the highest priority key with lowest usage
+                failure_category = "proxy_busy"
                 best_priority = min(priority_groups.keys())
                 best_priority_keys = priority_groups[best_priority]
                 best_wait_key = min(best_priority_keys, key=lambda x: x[1])[0]
@@ -2389,12 +2231,13 @@ class UsageManager:
                 )
                 effective_max_concurrent = max_concurrent * multiplier
 
-                tier1_keys, tier2_keys = [], []
+                tier1_keys = []
+                tier2_keys = []
 
                 # First, filter the list of available keys to exclude any on cooldown.
                 async with self._data_lock:
                     for key in available_keys:
-                        key_data = self._usage_data.get(key, {})
+                        key_data = usage_data.get(key, {})
 
                         # Skip keys on cooldown (use normalized model for lookup)
                         if (key_data.get("key_cooldown_until") or 0) > now or (
@@ -2469,14 +2312,10 @@ class UsageManager:
                     # Balanced mode with weighted randomness
                     selection_method = "weighted-random"
                     if tier1_keys:
-                        selected_key = self._select_weighted_random(
-                            tier1_keys, self.rotation_tolerance
-                        )
+                        selected_key = select_weighted_random(tier1_keys, self.rotation_tolerance)
                         tier1_keys = [(k, u) for k, u in tier1_keys if k == selected_key]
                     if tier2_keys:
-                        selected_key = self._select_weighted_random(
-                            tier2_keys, self.rotation_tolerance
-                        )
+                        selected_key = select_weighted_random(tier2_keys, self.rotation_tolerance)
                         tier2_keys = [(k, u) for k, u in tier2_keys if k == selected_key]
                 else:
                     # Deterministic: sort by usage within each tier
@@ -2490,10 +2329,12 @@ class UsageManager:
                     async with state["lock"]:
                         if not state["models_in_use"]:
                             state["models_in_use"][model] = 1
-                            tier_name = (
+                            optional_tier_name = (
                                 credential_tier_names.get(key) if credential_tier_names else None
                             )
-                            tier_info = f"tier: {tier_name}, " if tier_name else ""
+                            tier_info = (
+                                f"tier: {optional_tier_name}, " if optional_tier_name else ""
+                            )
                             quota_display = self._get_quota_display(key, model)
                             lib_logger.info(
                                 f"Acquired key {mask_credential(key)} for model {model} "
@@ -2508,10 +2349,12 @@ class UsageManager:
                         current_count = state["models_in_use"].get(model, 0)
                         if current_count < effective_max_concurrent:
                             state["models_in_use"][model] = current_count + 1
-                            tier_name = (
+                            optional_tier_name = (
                                 credential_tier_names.get(key) if credential_tier_names else None
                             )
-                            tier_info = f"tier: {tier_name}, " if tier_name else ""
+                            tier_info = (
+                                f"tier: {optional_tier_name}, " if optional_tier_name else ""
+                            )
                             quota_display = self._get_quota_display(key, model)
                             lib_logger.info(
                                 f"Acquired key {mask_credential(key)} for model {model} "
@@ -2524,6 +2367,7 @@ class UsageManager:
 
                 all_potential_keys = tier1_keys + tier2_keys
                 if not all_potential_keys:
+                    failure_category = "proxy_all_credentials_exhausted"
                     # All credentials are on cooldown - check if waiting makes sense
                     soonest_end = await self.get_soonest_cooldown_end(available_keys, model)
 
@@ -2554,6 +2398,7 @@ class UsageManager:
                     continue
 
                 # Wait on the condition of the key with the lowest current usage.
+                failure_category = "proxy_busy"
                 best_wait_key = min(all_potential_keys, key=lambda x: x[1])[0]
                 wait_condition = self.key_states[best_wait_key]["condition"]
                 wait_capacity = effective_max_concurrent
@@ -2585,37 +2430,39 @@ class UsageManager:
             finally:
                 wait_state["waiters"] -= 1
 
+        key_state_diagnostics = []
+        snapshot_keys = all_provider_credentials or available_keys
+        for snapshot_key in snapshot_keys:
+            snapshot_state = self.key_states.get(snapshot_key)
+            if not snapshot_state:
+                continue
+            current_in_use = snapshot_state["models_in_use"].get(model, 0)
+            cooldown_until = snapshot_state.get("cooldown_until", 0)
+            key_state_diagnostics.append(
+                {
+                    "credential": mask_credential(snapshot_key),
+                    "current_in_use_for_model": current_in_use,
+                    "has_any_in_use": bool(snapshot_state["models_in_use"]),
+                    "models_in_use": dict(snapshot_state["models_in_use"]),
+                    "on_cooldown": cooldown_until > time.time(),
+                    "cooldown_until": cooldown_until,
+                }
+            )
+
         diagnostics = {
             "model": model,
             "configured_max_concurrent": max_concurrent,
             "available_key_count": len(available_keys),
             "all_provider_key_count": len(all_provider_credentials or available_keys),
             "acquisition_deadline_exceeded": True,
-            "key_states": [],
+            "key_states": key_state_diagnostics,
         }
-
-        snapshot_keys = all_provider_credentials or available_keys
-        for key in snapshot_keys:
-            state = self.key_states.get(key)
-            if not state:
-                continue
-            current_in_use = state["models_in_use"].get(model, 0)
-            cooldown_until = state.get("cooldown_until", 0)
-            diagnostics["key_states"].append(
-                {
-                    "credential": mask_credential(key),
-                    "current_in_use_for_model": current_in_use,
-                    "has_any_in_use": bool(state["models_in_use"]),
-                    "models_in_use": dict(state["models_in_use"]),
-                    "on_cooldown": cooldown_until > time.time(),
-                    "cooldown_until": cooldown_until,
-                }
-            )
 
         raise NoAvailableKeysError(
             f"Could not acquire a key for model {model} within the acquisition time budget.",
             code="acquisition_timeout_exhausted",
             diagnostics=diagnostics,
+            category=failure_category,
         )
 
     async def release_key(self, key: str, model: str) -> None:
@@ -2672,6 +2519,8 @@ class UsageManager:
         - credential: Legacy mode with key_data["daily"]["models"]
         """
         await self._lazy_init()
+        usage_data = self._usage_data
+        assert usage_data is not None
 
         # Normalize model name to public-facing name for consistent tracking
         model = self._normalize_model(key, model)
@@ -2685,7 +2534,7 @@ class UsageManager:
 
             if reset_mode == "per_model":
                 # New per-model structure
-                key_data = self._usage_data.setdefault(
+                key_data = usage_data.setdefault(
                     key,
                     {
                         "models": {},
@@ -2780,7 +2629,7 @@ class UsageManager:
 
             else:
                 # Legacy credential-level structure
-                key_data = self._usage_data.setdefault(
+                key_data = usage_data.setdefault(
                     key,
                     {
                         "daily": {"date": today_utc_str, "models": {}},
@@ -2909,6 +2758,8 @@ class UsageManager:
                 Set to False for provider-level errors that shouldn't count against the key.
         """
         await self._lazy_init()
+        usage_data = self._usage_data
+        assert usage_data is not None
 
         # Normalize model name to public-facing name for consistent tracking
         model = self._normalize_model(key, model)
@@ -2922,7 +2773,7 @@ class UsageManager:
 
             # Initialize key data with appropriate structure
             if reset_mode == "per_model":
-                key_data = self._usage_data.setdefault(
+                key_data = usage_data.setdefault(
                     key,
                     {
                         "models": {},
@@ -2932,7 +2783,7 @@ class UsageManager:
                     },
                 )
             else:
-                key_data = self._usage_data.setdefault(
+                key_data = usage_data.setdefault(
                     key,
                     {
                         "daily": {"date": today_utc_str, "models": {}},
@@ -3214,11 +3065,13 @@ class UsageManager:
             }
         """
         await self._lazy_init()
+        usage_data = self._usage_data
+        assert usage_data is not None
         async with self._data_lock:
             now_ts = time.time()
 
             # Get or create key data structure
-            key_data = self._usage_data.setdefault(
+            key_data = usage_data.setdefault(
                 credential,
                 {
                     "models": {},
@@ -3259,7 +3112,9 @@ class UsageManager:
                 # Estimate max_requests from provider's quota cost
                 # This matches how get_max_requests_for_model() calculates it
                 provider = self._get_provider_from_credential(credential)
-                plugin_instance = self._get_provider_instance(provider)
+                plugin_instance = (
+                    self._get_provider_instance(provider) if provider is not None else None
+                )
                 if plugin_instance and hasattr(plugin_instance, "get_max_requests_for_model"):
                     # Get tier from provider's cache
                     tier = getattr(plugin_instance, "project_tier_cache", {}).get(
@@ -3308,7 +3163,7 @@ class UsageManager:
             is_exhausted = remaining_fraction <= 0.0
             cooldown_set_info = None  # Will be returned if cooldown was newly set/updated
 
-            if is_exhausted and valid_reset_ts:
+            if is_exhausted and valid_reset_ts and reset_timestamp is not None:
                 # Check if there was an existing ACTIVE cooldown before we update
                 # This distinguishes between fresh exhaustion vs refresh of existing state
                 existing_cooldown = model_cooldowns.get(model)

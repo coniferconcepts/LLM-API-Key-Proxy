@@ -3,6 +3,18 @@ import provider_config_conversion_cases as conversion_cases
 import provider_config_credential_cases as credential_cases
 import provider_config_proxy_cases as proxy_cases
 
+test_openai_local_api_base_uses_bare_catalog_model_on_wire = (
+    conversion_cases.test_openai_local_api_base_uses_bare_catalog_model_on_wire
+)
+test_openai_catalog_model_id_strips_only_openai_route_prefix = (
+    conversion_cases.test_openai_catalog_model_id_strips_only_openai_route_prefix
+)
+test_openai_without_local_api_base_keeps_qualified_model = (
+    conversion_cases.test_openai_without_local_api_base_keeps_qualified_model
+)
+test_non_openai_local_api_base_is_unchanged_by_openai_bare_wire_rule = (
+    conversion_cases.test_non_openai_local_api_base_is_unchanged_by_openai_bare_wire_rule
+)
 test_fireworks_v2_api_base_rewrites_fireworks_models = (
     conversion_cases.test_fireworks_v2_api_base_rewrites_fireworks_models
 )

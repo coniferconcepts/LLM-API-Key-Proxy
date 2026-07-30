@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Literal, Protocol
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from rotator_library.error_handler import (
+    NoAvailableKeysError,
+    build_public_stream_error,
+    classify_credential_failure,
+)
 
 _PUBLIC_ERRORS: dict[int, tuple[str, str, str]] = {
     400: ("invalid_request", "invalid_request", "The request is invalid."),
@@ -34,6 +40,15 @@ _ANTHROPIC_ERROR_TYPES: dict[int, str] = {
 _ANTHROPIC_PATHS = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
 
 
+class FinalResponseLogger(Protocol):
+    def log_final_response(
+        self,
+        status_code: int,
+        headers: dict[str, Any] | None,
+        body: dict[str, Any],
+    ) -> None: ...
+
+
 def public_error_detail(status: int, *, code: str | None = None) -> dict[str, Any]:
     error_type, default_code, message = _PUBLIC_ERRORS.get(status, _PUBLIC_ERRORS[500])
     return {
@@ -59,6 +74,52 @@ def anthropic_error_content(status: int) -> dict[str, Any]:
 def log_safe_exception(context: str, error: BaseException, status: int) -> None:
     error_type = _SAFE_TYPE.sub("_", type(error).__name__)[:64] or "Exception"
     logging.error("%s failed error_type=%s status=%d", context, error_type, status)
+
+
+def credential_failure_response(
+    category: Literal["proxy_busy", "proxy_all_credentials_exhausted"],
+    *,
+    content: dict[str, Any] | None = None,
+) -> JSONResponse:
+    classification = classify_credential_failure(category)
+    return JSONResponse(
+        status_code=classification.status,
+        content=content or build_public_stream_error(category),
+    )
+
+
+def handle_credential_failure(
+    error: NoAvailableKeysError,
+    logger: FinalResponseLogger | None,
+) -> JSONResponse:
+    classification = classify_credential_failure(error.category)
+    log_safe_exception("OpenAI credential acquisition", error, classification.status)
+    public_body = build_public_stream_error(error.category)
+    response = credential_failure_response(error.category, content=public_body)
+    if logger:
+        logger.log_final_response(
+            status_code=classification.status,
+            headers=None,
+            body=public_body,
+        )
+    return response
+
+
+def terminal_completion_error_response(response: Any) -> JSONResponse | None:
+    if not isinstance(response, dict) or not isinstance(response.get("error"), dict):
+        return None
+    error = response["error"]
+    classification = classify_credential_failure("proxy_all_credentials_exhausted")
+    if (
+        error.get("type") != classification.error_type
+        or error.get("code") != classification.code
+        or error.get("status") != classification.status
+    ):
+        return None
+    return credential_failure_response(
+        "proxy_all_credentials_exhausted",
+        content=response,
+    )
 
 
 class SafeUnhandledErrorMiddleware:

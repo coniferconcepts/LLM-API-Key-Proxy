@@ -6,8 +6,14 @@ import json
 import os
 import hashlib
 import logging
-from typing import Optional
+from typing import Literal, Optional
 import httpx
+
+from .credential_failures import (
+    CredentialFailureClassification as CredentialFailureClassification,
+    build_public_stream_error as build_public_stream_error,
+    classify_credential_failure as classify_credential_failure,
+)
 
 from litellm.exceptions import (
     APIConnectionError,
@@ -144,11 +150,17 @@ class NoAvailableKeysError(Exception):
         message: str,
         code: str = "global_timeout_exhausted",
         diagnostics: dict | None = None,
+        category: str = "proxy_busy",
     ):
         super().__init__(message)
         self.message = message
         self.code = code
         self.diagnostics = diagnostics or {}
+        match category:
+            case "proxy_busy" | "proxy_all_credentials_exhausted":
+                self.category: Literal["proxy_busy", "proxy_all_credentials_exhausted"] = category
+            case _:
+                self.category = "proxy_busy"
 
     def __str__(self):
         return f"{self.message} (code={self.code})"
@@ -265,43 +277,6 @@ PUBLIC_FAILURE_CATEGORIES = (
         }
     )
 )
-
-_PUBLIC_STREAM_ERRORS = {
-    "proxy_busy": (
-        "proxy_busy",
-        "acquisition_timeout",
-        503,
-        "No upstream credential is currently available. Retry later.",
-    ),
-    "quota_exceeded": (
-        "rate_limit_error",
-        "quota_exceeded",
-        429,
-        "The upstream service rate limited the request. Retry later.",
-    ),
-    "internal_error": (
-        "proxy_internal_error",
-        "stream_error",
-        500,
-        "The proxy could not complete the streaming request.",
-    ),
-}
-
-
-def build_public_stream_error(category: str) -> dict[str, dict[str, str | int]]:
-    """Return an allowlisted terminal SSE error without provider-controlled values."""
-    error_type, code, status, message = _PUBLIC_STREAM_ERRORS.get(
-        category,
-        _PUBLIC_STREAM_ERRORS["internal_error"],
-    )
-    return {
-        "error": {
-            "type": error_type,
-            "code": code,
-            "status": status,
-            "message": message,
-        }
-    }
 
 
 def is_abnormal_error(classified_error: "ClassifiedError") -> bool:
@@ -424,10 +399,11 @@ class RequestErrorAccumulator:
             status = 504
             message = "The proxy timed out while acquiring an upstream credential."
         else:
-            error_type = "proxy_all_credentials_exhausted"
-            error_code = "all_credentials_exhausted"
-            status = 503
-            message = "No upstream credential is currently available. Retry later."
+            classification = classify_credential_failure("proxy_all_credentials_exhausted")
+            error_type = classification.error_type
+            error_code = classification.code
+            status = classification.status
+            message = classification.message
 
         response = {
             "error": {

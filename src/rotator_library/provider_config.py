@@ -18,6 +18,10 @@ from typing import Dict, Any, Set, Optional
 from .litellm_providers import (
     SCRAPED_PROVIDERS,
 )
+from .credential_discovery import (
+    discover_api_keys_from_env as discover_api_keys_from_env,
+    normalize_credential_provider as normalize_credential_provider,
+)
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -621,60 +625,6 @@ ANTHROPIC_COMPATIBLE_CUSTOM_PROVIDERS: Set[str] = {
     "opencode_go_messages",
 }
 
-LEGACY_FIREWORKS_KEY_ENV_VARS = frozenset({"FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY"})
-
-CREDENTIAL_PROVIDER_ALIASES: Dict[str, str] = {
-    "ollama": "ollama_cloud",
-    "openrouter_free": "openrouter_non_zdr",
-}
-
-EXPLICIT_CREDENTIAL_PROVIDER_ENV_ALIASES: Dict[str, str] = {
-    "OPENROUTER_FREE_KEY": "openrouter_non_zdr",
-    "OPENROUTER_NON_ZDR_KEY": "openrouter_non_zdr",
-}
-
-
-def normalize_credential_provider(provider: str) -> str:
-    normalized = provider.strip().lower()
-    return CREDENTIAL_PROVIDER_ALIASES.get(normalized, normalized)
-
-
-def _provider_from_credential_env_key(key: str) -> Optional[str]:
-    if key == "FIREWORKS_API_V2_KEY":
-        return "fireworks"
-    if key in EXPLICIT_CREDENTIAL_PROVIDER_ENV_ALIASES:
-        return EXPLICIT_CREDENTIAL_PROVIDER_ENV_ALIASES[key]
-    if "_API_KEY" in key:
-        return normalize_credential_provider(key.split("_API_KEY")[0])
-    return None
-
-
-def discover_api_keys_from_env(env: Optional[Dict[str, str]] = None) -> Dict[str, list[str]]:
-    """Discover provider API keys from an environment mapping.
-
-    The Fireworks V2 subscription lane intentionally uses
-    ``FIREWORKS_API_V2_KEY``. That name does not contain the conventional
-    ``_API_KEY`` suffix, so it must be handled explicitly. Legacy Fireworks
-    key names are ignored to preserve the Kimi K2.6 cost boundary.
-    """
-    source = os.environ if env is None else env
-    api_keys: Dict[str, list[str]] = {}
-
-    for key, value in source.items():
-        if not value or key == "PROXY_API_KEY":
-            continue
-        if key in LEGACY_FIREWORKS_KEY_ENV_VARS:
-            continue
-        provider = _provider_from_credential_env_key(key)
-        if provider is None:
-            continue
-
-        provider_keys = api_keys.setdefault(provider, [])
-        if value not in provider_keys:
-            provider_keys.append(value)
-
-    return api_keys
-
 
 def get_provider_ui_config(provider_key: str) -> Dict[str, Any]:
     """Get UI configuration for a provider.
@@ -763,12 +713,30 @@ class ProviderConfig:
         """Get the set of detected custom provider names."""
         return self._custom_providers.copy()
 
+    @staticmethod
+    def openai_catalog_model_id(model: str) -> str:
+        """Return the bare OpenAI catalog id for route forms like ``openai/gpt-5.6-sol``.
+
+        Router/Mirrowel route identity stays provider-qualified. Local OpenAI-compatible
+        bases (codex-lb) allowlist bare catalog ids only; the wire JSON ``model`` field
+        must not include the ``openai/`` route prefix.
+        """
+        if not isinstance(model, str) or not model:
+            return model
+        if "/" not in model:
+            return model
+        provider, remainder = model.split("/", 1)
+        if provider.lower() == "openai" and remainder:
+            return remainder
+        return model
+
     def convert_for_litellm(self, **kwargs) -> Dict[str, Any]:
         """
         Convert model params for LiteLLM call.
 
         Handles:
         - Known provider with _API_BASE: pass api_base as override
+        - OpenAI + local/custom OPENAI_API_BASE: bare catalog model + custom_llm_provider
         - Unknown provider with _API_BASE: convert to openai/, set custom_llm_provider
         - Bare OpenAI-family model ids (gpt-*, o1/o3/o4-*) when OPENAI_API_BASE is set
         - No _API_BASE configured: pass through unchanged
@@ -800,7 +768,9 @@ class ProviderConfig:
                 or bare.startswith("chatgpt-")
             ):
                 kwargs = kwargs.copy()
-                kwargs["model"] = f"openai/{model}"
+                # Wire bare catalog id; explicit openai provider + api_base for routing.
+                kwargs["model"] = model
+                kwargs["custom_llm_provider"] = "openai"
                 kwargs["api_base"] = openai_base
                 kwargs["base_url"] = openai_base
                 lib_logger.info(
@@ -818,7 +788,22 @@ class ProviderConfig:
         # Create a copy to avoid modifying the original
         kwargs = kwargs.copy()
 
-        if provider in KNOWN_PROVIDERS:
+        if provider == "openai":
+            # codex-lb and other OpenAI-compatible loopback servers reject
+            # "openai/<catalog-id>" as the JSON model field. Keep LiteLLM on the
+            # openai provider via custom_llm_provider while sending the bare id.
+            bare = self.openai_catalog_model_id(model)
+            kwargs["model"] = bare
+            kwargs["custom_llm_provider"] = "openai"
+            kwargs["api_base"] = api_base
+            kwargs["base_url"] = api_base
+            lib_logger.info(
+                "Applying openai api_base with bare wire model %s (route %s) -> %s",
+                bare,
+                model,
+                api_base,
+            )
+        elif provider in KNOWN_PROVIDERS:
             # Known provider - just add api_base override
             kwargs["api_base"] = api_base
             # Some LiteLLM versions honor base_url over api_base for openai/*

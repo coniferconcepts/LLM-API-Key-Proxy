@@ -39,6 +39,7 @@ from .cooldown_manager import CooldownManager
 from .credential_manager import CredentialManager
 from .background_refresher import BackgroundRefresher
 from .model_definitions import ModelDefinitions
+from .openrouter_headers import _merge_openrouter_extra_headers
 from .routing_policy import RouteDecision, RoutingPolicy, RoutingPolicyError
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir
@@ -63,49 +64,27 @@ lib_logger = logging.getLogger("rotator_library")
 lib_logger.propagate = False
 
 
+def _safe_request_headers(request: Any) -> Dict[str, str]:
+    if request is None:
+        return {}
+    blocked = {
+        "x-opencode-bounded-capability",
+        "x-opencode-internal-bounded-capability",
+        "x-opencode-internal-bounded-entry",
+    }
+    return {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower() not in blocked
+    }
+
+
 class StreamedAPIError(Exception):
     """Custom exception to signal an API error received over a stream."""
 
     def __init__(self, message, data=None):
         super().__init__(message)
         self.data = data
-
-
-OPENROUTER_ATTRIBUTION_HEADER_KEYS = (
-    "HTTP-Referer",
-    "X-OpenRouter-Title",
-    "X-Title",
-    "X-OpenRouter-Categories",
-)
-
-
-def _get_request_header(request: Optional[Any], key: str) -> Optional[str]:
-    if request is None:
-        return None
-    headers = getattr(request, "headers", None)
-    if headers is None:
-        return None
-    if hasattr(headers, "get"):
-        value = headers.get(key)
-        if value is None:
-            value = headers.get(key.lower())
-        return value
-    if isinstance(headers, dict):
-        return headers.get(key) or headers.get(key.lower())
-    return None
-
-
-def _merge_openrouter_extra_headers(
-    litellm_kwargs: Dict[str, Any], request: Optional[Any]
-) -> Dict[str, Any]:
-    extra_headers = dict(litellm_kwargs.get("extra_headers") or {})
-    for key in OPENROUTER_ATTRIBUTION_HEADER_KEYS:
-        value = _get_request_header(request, key)
-        if value and key not in extra_headers:
-            extra_headers[key] = value
-    if extra_headers:
-        litellm_kwargs["extra_headers"] = extra_headers
-    return litellm_kwargs
 
 
 class RotatingClient:
@@ -1594,7 +1573,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
 
                             # Record in accumulator for client reporting
@@ -1635,7 +1614,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message = str(e).split("\n")[0]
@@ -1683,7 +1662,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message = str(e).split("\n")[0]
@@ -1830,7 +1809,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
 
@@ -1872,7 +1851,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message = str(e).split("\n")[0]
@@ -1925,7 +1904,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
 
                             classified_error = classify_error(e, provider=provider)
@@ -1986,7 +1965,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
 
                             if request and await request.is_disconnected():
@@ -2358,7 +2337,7 @@ class RotatingClient:
                                     model=model,
                                     attempt=attempt + 1,
                                     error=e,
-                                    request_headers=dict(request.headers) if request else {},
+                                    request_headers=_safe_request_headers(request),
                                 )
 
                                 # Record in accumulator for client reporting
@@ -2402,7 +2381,7 @@ class RotatingClient:
                                     model=model,
                                     attempt=attempt + 1,
                                     error=e,
-                                    request_headers=dict(request.headers) if request else {},
+                                    request_headers=_safe_request_headers(request),
                                 )
                                 classified_error = classify_error(e, provider=provider)
                                 error_message = str(e).split("\n")[0]
@@ -2450,7 +2429,7 @@ class RotatingClient:
                                     model=model,
                                     attempt=attempt + 1,
                                     error=e,
-                                    request_headers=dict(request.headers) if request else {},
+                                    request_headers=_safe_request_headers(request),
                                 )
                                 classified_error = classify_error(e, provider=provider)
                                 error_message = str(e).split("\n")[0]
@@ -2640,7 +2619,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                                 raw_response_text=cleaned_str,
                             )
 
@@ -2711,7 +2690,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message_text = str(e).split("\n")[0]
@@ -2761,7 +2740,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=dict(request.headers) if request else {},
+                                request_headers=_safe_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message_text = str(e).split("\n")[0]
@@ -2829,9 +2808,9 @@ class RotatingClient:
             yield f"data: {json.dumps(error_data)}\n\n"
             yield "data: [DONE]\n\n"
 
-        except NoAvailableKeysError:
-            lib_logger.error("Streaming request failed category=proxy_busy")
-            error_data = build_public_stream_error("proxy_busy")
+        except NoAvailableKeysError as error:
+            lib_logger.error("Streaming request failed category=%s", error.category)
+            error_data = build_public_stream_error(error.category)
             yield f"data: {json.dumps(error_data)}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
