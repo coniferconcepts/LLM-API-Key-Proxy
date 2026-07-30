@@ -100,7 +100,9 @@ def validate_internal_request(
         raise BoundedCampaignError("bounded manifest capability is malformed")
     if len(set(entry_ids)) != 63 or len(set(internal_capabilities)) != 63:
         raise BoundedCampaignError("bounded manifest identifiers are not unique")
-    matches = [entry for entry in entries if isinstance(entry, dict) and entry.get("entry_id") == entry_id]
+    matches = [
+        entry for entry in entries if isinstance(entry, dict) and entry.get("entry_id") == entry_id
+    ]
     if len(matches) != 1:
         raise BoundedCampaignError("bounded entry is unknown or duplicated")
     entry = matches[0]
@@ -158,7 +160,9 @@ class DurableReservationLedger:
             ledger_descriptor = self._open_owner_file(self.path, create=True)
             with os.fdopen(ledger_descriptor, "a", encoding="utf-8") as ledger:
                 if not entries and ledger.tell() == 0:
-                    ledger.write(json.dumps({"manifest_sha256": authorization.manifest_sha256}) + "\n")
+                    ledger.write(
+                        json.dumps({"manifest_sha256": authorization.manifest_sha256}) + "\n"
+                    )
                 ledger.write(json.dumps({"entry_id": authorization.entry_id}) + "\n")
                 ledger.flush()
                 os.fsync(ledger.fileno())

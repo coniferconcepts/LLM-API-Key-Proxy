@@ -64,9 +64,7 @@ def fake_provider(scenario: ProviderScenario) -> Iterator[FakeProvider]:
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
-            decoded = json.loads(
-                self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            )
+            decoded = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             body = cast(JSONObject, decoded)
             posts.append(RecordedPost(path=self.path, body=body))
             if scenario.disconnect:
@@ -113,18 +111,14 @@ def fake_provider(scenario: ProviderScenario) -> Iterator[FakeProvider]:
                     "object": "chat.completion",
                     "created": 1,
                     "model": "grok-4.5",
-                    "choices": [
-                        {"index": 0, "message": message, "finish_reason": "stop"}
-                    ],
+                    "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
                 },
             )
 
         def _write_response(self, status: int, body: JSONObject) -> None:
             self._write_encoded(status, "application/json", json.dumps(body).encode())
 
-        def _write_encoded(
-            self, status: int, content_type: str, body: bytes
-        ) -> None:
+        def _write_encoded(self, status: int, content_type: str, body: bytes) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))

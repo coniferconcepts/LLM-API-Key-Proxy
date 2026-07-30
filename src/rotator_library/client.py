@@ -72,11 +72,7 @@ def _safe_request_headers(request: Any) -> Dict[str, str]:
         "x-opencode-internal-bounded-capability",
         "x-opencode-internal-bounded-entry",
     }
-    return {
-        name: value
-        for name, value in request.headers.items()
-        if name.lower() not in blocked
-    }
+    return {name: value for name, value in request.headers.items() if name.lower() not in blocked}
 
 
 class StreamedAPIError(Exception):

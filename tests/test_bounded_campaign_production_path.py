@@ -18,6 +18,7 @@ from bounded_campaign_production_support import (  # noqa: E402
     reserve_synthetic_campaign_headroom,
 )
 
+
 @pytest.mark.parametrize(
     ("stream", "tool"),
     [(False, False), (True, False), (False, True), (True, True)],
@@ -67,12 +68,7 @@ def test_production_adapter_suppresses_second_post_after_egress_failure(
             base_url="http://127.0.0.1",
             raise_server_exceptions=False,
         ) as client:
-            assert (
-                len(
-                    module.app.state.rotating_client.all_credentials["xai_oauth"]
-                )
-                == 2
-            )
+            assert len(module.app.state.rotating_client.all_credentials["xai_oauth"]) == 2
             response = client.post("/v1/chat/completions", headers=headers, json=request)
 
     assert response.status_code != 200
@@ -90,9 +86,7 @@ def test_duplicate_capability_rejects_before_network(
         module = proxy_module(monkeypatch, tmp_path, provider)
         with TestClient(module.app, base_url="http://127.0.0.1") as client:
             first = client.post("/v1/chat/completions", headers=headers, json=request)
-            duplicate = client.post(
-                "/v1/chat/completions", headers=headers, json=request
-            )
+            duplicate = client.post("/v1/chat/completions", headers=headers, json=request)
 
     assert first.status_code == 200
     assert duplicate.status_code != 200
@@ -116,9 +110,7 @@ def test_restart_recovers_durable_reservation_before_network(
             base_url="http://127.0.0.1",
             raise_server_exceptions=False,
         ) as restarted:
-            recovered = restarted.post(
-                "/v1/chat/completions", headers=headers, json=request
-            )
+            recovered = restarted.post("/v1/chat/completions", headers=headers, json=request)
 
     assert first.status_code == 200
     assert recovered.status_code != 200
