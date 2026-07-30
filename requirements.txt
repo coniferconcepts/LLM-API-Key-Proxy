@@ -1,7 +1,7 @@
 # FastAPI framework for building the proxy server
-fastapi==0.135.2
+fastapi==0.140.13
 # ASGI server for running the FastAPI application
-uvicorn==0.42.0
+uvicorn==0.48.0
 # For loading environment variables from a .env file.
 # LiteLLM 1.83.14 requires python-dotenv 1.2.2.
 python-dotenv==1.2.2
