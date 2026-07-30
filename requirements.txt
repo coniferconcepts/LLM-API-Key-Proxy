@@ -14,11 +14,11 @@ python-dotenv==1.2.2
 # GH#17 P0: floor LiteLLM >=1.84.0 (advisories GHSA-4xpc-pv4p-pm3w, GHSA-7488-6r32-c95q).
 litellm==1.94.0
 
-filelock==3.20.3
+filelock==3.32.0
 httpx==0.28.1
 aiofiles==24.1.0
-# LiteLLM 1.94.x requires aiohttp>=3.10,<4; stay above 3.13.4 advisory surface.
-aiohttp==3.13.5
+# LiteLLM 1.94.x requires aiohttp>=3.10,<4; GH#17 floor is 3.14.1+ (use 3.14.3).
+aiohttp==3.14.3
 
 colorlog==6.9.0
 
