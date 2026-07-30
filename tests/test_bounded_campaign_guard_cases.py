@@ -1,16 +1,11 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import importlib
 import json
 import os
 from pathlib import Path
 import sys
-import threading
 import time
-import urllib.error
-import urllib.request
 
 import pytest
 
