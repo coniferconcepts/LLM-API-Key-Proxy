@@ -35,7 +35,11 @@ from .providers import PROVIDER_PLUGINS
 from .providers.openai_compatible_provider import OpenAICompatibleProvider
 from .openai_stream_normalize import OpenAIStreamNormalizer
 from .request_sanitizer import sanitize_request_payload
-from .cooldown_manager import CooldownManager
+from .cooldown_manager import (
+    CooldownManager,
+    has_untried_peer_credentials,
+    should_apply_provider_cooldown_for_rate_limit_error,
+)
 from .credential_manager import CredentialManager
 from .background_refresher import BackgroundRefresher
 from .model_definitions import ModelDefinitions
@@ -1270,6 +1274,49 @@ class RotatingClient:
                         f"TransactionLogger: Failed to assemble/log final response: {e}"
                     )
 
+    async def _maybe_start_provider_cooldown_on_rate_limit(
+        self,
+        *,
+        provider: str,
+        credentials_for_provider: List[str],
+        tried_creds: set,
+        classified_error: Any,
+    ) -> bool:
+        """
+        Start a provider-wide cooldown only when no untried peer keys remain.
+
+        Multi-account HA (e.g. two OpenCode GO keys): a 429 on key A must cool
+        that credential (via UsageManager.record_failure) and rotate to key B
+        without freezing the whole provider. Provider-wide cool remains for
+        last-key / single-key rate limits (shared IP or total exhaustion).
+
+        Returns True if a provider-wide cooldown was started.
+        """
+        if not should_apply_provider_cooldown_for_rate_limit_error(
+            status_code=getattr(classified_error, "status_code", None),
+            error_type=getattr(classified_error, "error_type", None),
+        ):
+            return False
+
+        cooldown_duration = getattr(classified_error, "retry_after", None) or 60
+        if has_untried_peer_credentials(credentials_for_provider, tried_creds):
+            remaining = sum(1 for c in credentials_for_provider if c not in tried_creds)
+            lib_logger.info(
+                "Rate limit on provider %s; %s untried peer key(s) remain — "
+                "skip provider-wide cooldown (rotate to peer)",
+                provider,
+                remaining,
+            )
+            return False
+
+        await self.cooldown_manager.start_cooldown(provider, cooldown_duration)
+        lib_logger.warning(
+            "Rate limit on provider %s with no untried peers — " "provider cooldown %ss",
+            provider,
+            cooldown_duration,
+        )
+        return True
+
     async def _execute_with_retry(
         self,
         api_call: callable,
@@ -1584,12 +1631,13 @@ class RotatingClient:
                                 )
                                 raise last_exception
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded)
-                            if classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    provider, cooldown_duration
-                                )
+                            # Peer-aware rate-limit cool (skip provider freeze if peers remain)
+                            await self._maybe_start_provider_cooldown_on_rate_limit(
+                                provider=provider,
+                                credentials_for_provider=credentials_for_provider,
+                                tried_creds=tried_creds,
+                                classified_error=classified_error,
+                            )
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
@@ -1679,15 +1727,13 @@ class RotatingClient:
                                 )
                                 raise last_exception
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded)
-                            if (
-                                classified_error.status_code == 429
-                                and classified_error.error_type != "quota_exceeded"
-                            ) or classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    provider, cooldown_duration
-                                )
+                            # Peer-aware rate-limit cool (skip provider freeze if peers remain)
+                            await self._maybe_start_provider_cooldown_on_rate_limit(
+                                provider=provider,
+                                credentials_for_provider=credentials_for_provider,
+                                tried_creds=tried_creds,
+                                classified_error=classified_error,
+                            )
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
@@ -1821,15 +1867,13 @@ class RotatingClient:
                                 f"Key {mask_credential(current_cred)} hit rate limit for {model}. Rotating key."
                             )
 
-                            # Only trigger provider-wide cooldown for rate limits, not quota issues
-                            if (
-                                classified_error.status_code == 429
-                                and classified_error.error_type != "quota_exceeded"
-                            ):
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    provider, cooldown_duration
-                                )
+                            # Peer-aware: provider cool only when no untried peers remain
+                            await self._maybe_start_provider_cooldown_on_rate_limit(
+                                provider=provider,
+                                credentials_for_provider=credentials_for_provider,
+                                tried_creds=tried_creds,
+                                classified_error=classified_error,
+                            )
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
@@ -1922,12 +1966,13 @@ class RotatingClient:
                                 current_cred, classified_error, error_message
                             )
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded from provider-wide cooldown)
-                            if classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    provider, cooldown_duration
-                                )
+                            # Peer-aware rate-limit cool (skip provider freeze if peers remain)
+                            await self._maybe_start_provider_cooldown_on_rate_limit(
+                                provider=provider,
+                                credentials_for_provider=credentials_for_provider,
+                                tried_creds=tried_creds,
+                                classified_error=classified_error,
+                            )
 
                             # Check if we should retry same key (server errors with retries left)
                             if (
@@ -1977,15 +2022,13 @@ class RotatingClient:
                                 f"Key {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code})."
                             )
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded from provider-wide cooldown)
-                            if (
-                                classified_error.status_code == 429
-                                and classified_error.error_type != "quota_exceeded"
-                            ) or classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    provider, cooldown_duration
-                                )
+                            # Peer-aware rate-limit cool (skip provider freeze if peers remain)
+                            await self._maybe_start_provider_cooldown_on_rate_limit(
+                                provider=provider,
+                                credentials_for_provider=credentials_for_provider,
+                                tried_creds=tried_creds,
+                                classified_error=classified_error,
+                            )
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
@@ -2348,12 +2391,13 @@ class RotatingClient:
                                     )
                                     raise last_exception
 
-                                # Handle rate limits with cooldown (exclude quota_exceeded)
-                                if classified_error.error_type == "rate_limit":
-                                    cooldown_duration = classified_error.retry_after or 60
-                                    await self.cooldown_manager.start_cooldown(
-                                        provider, cooldown_duration
-                                    )
+                                # Peer-aware rate-limit cool (skip provider freeze if peers remain)
+                                await self._maybe_start_provider_cooldown_on_rate_limit(
+                                    provider=provider,
+                                    credentials_for_provider=credentials_for_provider,
+                                    tried_creds=tried_creds,
+                                    classified_error=classified_error,
+                                )
 
                                 await self.usage_manager.record_failure(
                                     current_cred, model, classified_error
@@ -2663,11 +2707,13 @@ class RotatingClient:
                                     classified_error.error_type,
                                 )
 
-                                if classified_error.error_type == "rate_limit":
-                                    cooldown_duration = classified_error.retry_after or 60
-                                    await self.cooldown_manager.start_cooldown(
-                                        provider, cooldown_duration
-                                    )
+                                # Peer-aware rate-limit cool (skip provider freeze if peers remain)
+                                await self._maybe_start_provider_cooldown_on_rate_limit(
+                                    provider=provider,
+                                    credentials_for_provider=credentials_for_provider,
+                                    tried_creds=tried_creds,
+                                    classified_error=classified_error,
+                                )
 
                                 await self.usage_manager.record_failure(
                                     current_cred, model, classified_error
@@ -2753,18 +2799,13 @@ class RotatingClient:
                                 (error_message_text or "")[:240],
                             )
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded)
-                            if (
-                                classified_error.status_code == 429
-                                and classified_error.error_type != "quota_exceeded"
-                            ) or classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    provider, cooldown_duration
-                                )
-                                lib_logger.warning(
-                                    f"Rate limit detected for {provider}. Starting {cooldown_duration}s cooldown."
-                                )
+                            # Peer-aware rate-limit cool (skip provider freeze if peers remain)
+                            await self._maybe_start_provider_cooldown_on_rate_limit(
+                                provider=provider,
+                                credentials_for_provider=credentials_for_provider,
+                                tried_creds=tried_creds,
+                                classified_error=classified_error,
+                            )
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
