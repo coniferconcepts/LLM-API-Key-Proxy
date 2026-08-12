@@ -41,6 +41,13 @@ if not lib_logger.handlers:
     lib_logger.addHandler(logging.NullHandler())
 
 
+def _active_key_block(key_data: Dict[str, Any], now: float) -> float:
+    """Latest of generic key cooldown and GO-usage cooldown. Never mixes provenance."""
+    key_cd = key_data.get("key_cooldown_until") or 0
+    go_cd = key_data.get("go_usage_cooldown_until") or 0
+    return max(float(key_cd), float(go_cd))
+
+
 class UsageManager:
     """
     Manages usage statistics and cooldowns for API keys with asyncio-safe locking,
@@ -1390,8 +1397,8 @@ class UsageManager:
             for key in credentials:
                 key_data = usage_data.get(key, {})
 
-                # Skip if key-level cooldown is active
-                if (key_data.get("key_cooldown_until") or 0) > now:
+                # Skip if key-level or GO-usage cooldown is active
+                if _active_key_block(key_data, now) > now:
                     continue
 
                 # Normalize model name for consistent cooldown lookup
@@ -1447,9 +1454,10 @@ class UsageManager:
 
                 # Check if key-level or model-level cooldown is active
                 normalized_model = self._normalize_model(key, model)
-                if (key_data.get("key_cooldown_until") or 0) > now or (
-                    key_data.get("model_cooldowns", {}).get(normalized_model) or 0
-                ) > now:
+                if (
+                    _active_key_block(key_data, now) > now
+                    or (key_data.get("model_cooldowns", {}).get(normalized_model) or 0) > now
+                ):
                     on_cooldown += 1
                 else:
                     not_on_cooldown.append(key)
@@ -1513,8 +1521,8 @@ class UsageManager:
                 key_data = usage_data.get(key, {})
                 normalized_model = self._normalize_model(key, model)
 
-                # Check key-level cooldown
-                key_cooldown = key_data.get("key_cooldown_until") or 0
+                # Check key-level + GO-usage cooldown
+                key_cooldown = _active_key_block(key_data, now)
                 if key_cooldown > now:
                     if soonest_end is None or key_cooldown < soonest_end:
                         soonest_end = key_cooldown
@@ -1933,6 +1941,20 @@ class UsageManager:
         else:
             data["key_cooldown_until"] = None
 
+        # Preserve unexpired GO-usage cooldown separately (ok refresh may clear it)
+        go_cd = data.get("go_usage_cooldown_until")
+        if go_cd:
+            if go_cd <= now_ts:
+                data["go_usage_cooldown_until"] = None
+            else:
+                hours_remaining = (go_cd - now_ts) / 3600
+                lib_logger.info(
+                    f"Preserving GO-usage cooldown for {mask_credential(key)} "
+                    f"during reset ({hours_remaining:.1f}h remaining)"
+                )
+        else:
+            data["go_usage_cooldown_until"] = None
+
     def _initialize_key_states(self, keys: List[str]):
         """Initializes state tracking for all provided keys if not already present."""
         for key in keys:
@@ -2016,9 +2038,11 @@ class UsageManager:
                         key_data = usage_data.get(key, {})
 
                         # Skip keys on cooldown (use normalized model for lookup)
-                        if (key_data.get("key_cooldown_until") or 0) > now or (
-                            key_data.get("model_cooldowns", {}).get(normalized_model) or 0
-                        ) > now:
+                        if (
+                            _active_key_block(key_data, now) > now
+                            or (key_data.get("model_cooldowns", {}).get(normalized_model) or 0)
+                            > now
+                        ):
                             continue
 
                         # Get priority for this key (default to 999 if not specified)
@@ -2240,9 +2264,11 @@ class UsageManager:
                         key_data = usage_data.get(key, {})
 
                         # Skip keys on cooldown (use normalized model for lookup)
-                        if (key_data.get("key_cooldown_until") or 0) > now or (
-                            key_data.get("model_cooldowns", {}).get(normalized_model) or 0
-                        ) > now:
+                        if (
+                            _active_key_block(key_data, now) > now
+                            or (key_data.get("model_cooldowns", {}).get(normalized_model) or 0)
+                            > now
+                        ):
                             continue
 
                         # Prioritize keys based on their current usage to ensure load balancing.
@@ -3030,6 +3056,49 @@ class UsageManager:
             }
 
         await self._save_usage()
+
+    async def update_go_quota(
+        self,
+        credential: str,
+        snapshot: Dict[str, Any],
+        *,
+        now_ts: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Apply a normalized GO usage snapshot. Never writes count-typed fields.
+
+        Stores go_usage_snapshot and go_usage_cooldown_until only. Leaves
+        request_count, quota_max_requests, quota_reset_ts, and key_cooldown_until
+        untouched. Scrape failures must not call this method.
+        """
+        from .go_usage.gate import evaluate_go_usage
+
+        await self._lazy_init()
+        clock = time.time() if now_ts is None else now_ts
+        decision = evaluate_go_usage(
+            snapshot,
+            now=datetime.fromtimestamp(clock, tz=timezone.utc),
+        )
+        usage_data = self._usage_data
+        assert usage_data is not None
+        async with self._data_lock:
+            key_data = usage_data.setdefault(credential, {})
+            # Never persist raw key material; snapshot is status/percent/resetsAt only.
+            stored = {
+                "fetched_at": clock,
+                "usage": snapshot.get("usage"),
+            }
+            key_data["go_usage_snapshot"] = stored
+            if decision["action"] == "arm":
+                key_data["go_usage_cooldown_until"] = decision["cooldown_until"]
+            elif decision["action"] == "clear":
+                key_data["go_usage_cooldown_until"] = None
+            # retain: leave existing go_usage_cooldown_until
+        await self._save_usage()
+        return {
+            "action": decision["action"],
+            "reason": decision["reason"],
+            "go_usage_cooldown_until": (usage_data[credential].get("go_usage_cooldown_until")),
+        }
 
     async def update_quota_baseline(
         self,
