@@ -151,11 +151,13 @@ class NoAvailableKeysError(Exception):
         code: str = "global_timeout_exhausted",
         diagnostics: dict | None = None,
         category: str = "proxy_busy",
+        soonest_end: float | None = None,
     ):
         super().__init__(message)
         self.message = message
         self.code = code
         self.diagnostics = diagnostics or {}
+        self.soonest_end = soonest_end if soonest_end and soonest_end > 0 else None
         match category:
             case "proxy_busy" | "proxy_all_credentials_exhausted":
                 self.category: Literal["proxy_busy", "proxy_all_credentials_exhausted"] = category

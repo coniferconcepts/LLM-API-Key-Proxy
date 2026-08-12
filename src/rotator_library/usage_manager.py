@@ -2024,6 +2024,7 @@ class UsageManager:
         failure_category: Literal["proxy_busy", "proxy_all_credentials_exhausted"] = (
             "proxy_busy" if available_keys else "proxy_all_credentials_exhausted"
         )
+        recorded_soonest_end: Optional[float] = None
 
         # This loop continues as long as the acquisition deadline has not been met.
         while time.time() < acquisition_deadline:
@@ -2215,6 +2216,7 @@ class UsageManager:
                             f"All credentials on cooldown. Soonest available in {wait_needed:.1f}s, "
                             f"but only {remaining_budget:.1f}s budget remaining. Failing fast."
                         )
+                        recorded_soonest_end = soonest_end
                         break  # Exit loop, will raise NoAvailableKeysError
 
                     # Wait for the credential to become available
@@ -2414,6 +2416,7 @@ class UsageManager:
                             f"All credentials on cooldown. Soonest available in {wait_needed:.1f}s, "
                             f"but only {remaining_budget:.1f}s budget remaining. Failing fast."
                         )
+                        recorded_soonest_end = soonest_end
                         break  # Exit loop, will raise NoAvailableKeysError
 
                     # Wait for the credential to become available
@@ -2489,6 +2492,7 @@ class UsageManager:
             code="acquisition_timeout_exhausted",
             diagnostics=diagnostics,
             category=failure_category,
+            soonest_end=recorded_soonest_end,
         )
 
     async def release_key(self, key: str, model: str) -> None:
@@ -3099,6 +3103,22 @@ class UsageManager:
             "reason": decision["reason"],
             "go_usage_cooldown_until": (usage_data[credential].get("go_usage_cooldown_until")),
         }
+
+    async def go_usage_eligibility(
+        self,
+        credentials: List[str],
+        *,
+        now_ts: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Family-wide GO eligibility for unique credential values."""
+        from .go_usage.eligibility import summarize_go_eligibility
+
+        await self._lazy_init()
+        clock = time.time() if now_ts is None else now_ts
+        usage_data = self._usage_data
+        assert usage_data is not None
+        async with self._data_lock:
+            return summarize_go_eligibility(usage_data, credentials, now=clock)
 
     async def update_quota_baseline(
         self,

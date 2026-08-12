@@ -60,7 +60,10 @@ def classify_credential_failure(
     return _CREDENTIAL_FAILURES[category]
 
 
-def build_public_stream_error(category: str) -> dict[str, dict[str, str | int]]:
+def build_public_stream_error(
+    category: str,
+    retry_after_seconds: int | None = None,
+) -> dict[str, dict[str, str | int]]:
     """Return an allowlisted terminal SSE error without provider-controlled values."""
     credential_failure = _CREDENTIAL_FAILURES.get(category)
     if credential_failure is None:
@@ -73,11 +76,12 @@ def build_public_stream_error(category: str) -> dict[str, dict[str, str | int]]:
         code = credential_failure.code
         status = credential_failure.status
         message = credential_failure.message
-    return {
-        "error": {
-            "type": error_type,
-            "code": code,
-            "status": status,
-            "message": message,
-        }
+    error: dict[str, str | int] = {
+        "type": error_type,
+        "code": code,
+        "status": status,
+        "message": message,
     }
+    if retry_after_seconds is not None and retry_after_seconds >= 1:
+        error["retry_after_seconds"] = int(retry_after_seconds)
+    return {"error": error}

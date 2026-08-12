@@ -929,6 +929,17 @@ async def credential_summary(
     return build_credential_summary(client)
 
 
+@app.get("/v1/go-usage-eligibility")
+async def go_usage_eligibility(
+    _=Depends(verify_api_key),
+    client: RotatingClient = Depends(get_rotating_client),
+):
+    from rotator_library.go_usage.eligibility import collect_go_credentials
+
+    credentials = collect_go_credentials(client.api_keys)
+    return await client.usage_manager.go_usage_eligibility(credentials)
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(
     request: Request,

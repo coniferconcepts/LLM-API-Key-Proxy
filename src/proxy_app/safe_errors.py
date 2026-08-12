@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
+import time
 from typing import Any, Literal, Protocol
 
 from starlette.responses import JSONResponse
@@ -76,15 +78,34 @@ def log_safe_exception(context: str, error: BaseException, status: int) -> None:
     logging.error("%s failed error_type=%s status=%d", context, error_type, status)
 
 
+def retry_after_seconds_from_soonest(
+    soonest_end: float | None,
+    *,
+    now: float | None = None,
+) -> int | None:
+    """Ceil remaining seconds if soonest_end is in the future; else None."""
+    if soonest_end is None:
+        return None
+    remaining = float(soonest_end) - (time.time() if now is None else now)
+    if remaining <= 0:
+        return None
+    return max(1, int(math.ceil(remaining)))
+
+
 def credential_failure_response(
     category: Literal["proxy_busy", "proxy_all_credentials_exhausted"],
     *,
     content: dict[str, Any] | None = None,
+    retry_after_seconds: int | None = None,
 ) -> JSONResponse:
     classification = classify_credential_failure(category)
+    headers = None
+    if retry_after_seconds is not None and retry_after_seconds >= 1:
+        headers = {"Retry-After": str(int(retry_after_seconds))}
     return JSONResponse(
         status_code=classification.status,
-        content=content or build_public_stream_error(category),
+        content=content or build_public_stream_error(category, retry_after_seconds),
+        headers=headers,
     )
 
 
@@ -94,12 +115,19 @@ def handle_credential_failure(
 ) -> JSONResponse:
     classification = classify_credential_failure(error.category)
     log_safe_exception("OpenAI credential acquisition", error, classification.status)
-    public_body = build_public_stream_error(error.category)
-    response = credential_failure_response(error.category, content=public_body)
+    retry_after = None
+    if error.category == "proxy_all_credentials_exhausted":
+        retry_after = retry_after_seconds_from_soonest(error.soonest_end)
+    public_body = build_public_stream_error(error.category, retry_after)
+    response = credential_failure_response(
+        error.category,
+        content=public_body,
+        retry_after_seconds=retry_after,
+    )
     if logger:
         logger.log_final_response(
             status_code=classification.status,
-            headers=None,
+            headers={"retry-after": str(retry_after)} if retry_after else None,
             body=public_body,
         )
     return response
