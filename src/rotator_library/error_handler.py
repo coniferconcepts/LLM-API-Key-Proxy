@@ -720,14 +720,6 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 original_exception=e,
                 status_code=status_code,
             )
-        if status_code == 403:
-            # 403 Forbidden - credential doesn't have access, should rotate
-            # Could be: IP restriction, account disabled, permission denied, etc.
-            return ClassifiedError(
-                error_type="forbidden",
-                original_exception=e,
-                status_code=status_code,
-            )
         if status_code == 429:
             retry_after = get_retry_after(e)
             # Check if this is a quota error vs rate limit
@@ -784,16 +776,16 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 error_type="server_error", original_exception=e, status_code=status_code
             )
 
-    if isinstance(e, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):  # [NEW]
-        return ClassifiedError(
-            error_type="api_connection", original_exception=e, status_code=status_code
-        )
-
     if status_code == 403:
         return ClassifiedError(
             error_type="forbidden",
             original_exception=e,
             status_code=status_code,
+        )
+
+    if isinstance(e, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):  # [NEW]
+        return ClassifiedError(
+            error_type="api_connection", original_exception=e, status_code=status_code
         )
 
     if isinstance(e, PreRequestCallbackError):

@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Mirrowel
 
 import asyncio
+import logging
 import time
 from typing import Collection, Dict, Iterable, Optional
 
@@ -40,6 +41,27 @@ def should_apply_provider_cooldown_for_rate_limit_error(
     if status_code == 429 and error_type != "quota_exceeded":
         return True
     return False
+
+
+COOLDOWN_BUDGET_EXCEEDED_MESSAGE = (
+    "No credentials were available within the remaining request budget."
+)
+
+
+def raise_if_cooldown_exceeds_budget(remaining_cooldown: float, remaining_budget: float) -> None:
+    from .error_handler import NoAvailableKeysError
+
+    if remaining_cooldown <= remaining_budget:
+        return
+    logging.getLogger("rotator_library").warning(
+        "Provider cooldown exceeds remaining request budget. Failing early."
+    )
+    raise NoAvailableKeysError(
+        COOLDOWN_BUDGET_EXCEEDED_MESSAGE,
+        code="acquisition_timeout_exhausted",
+        category="proxy_all_credentials_exhausted",
+        soonest_end=time.time() + remaining_cooldown,
+    )
 
 
 class CooldownManager:

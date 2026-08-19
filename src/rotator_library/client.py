@@ -38,6 +38,7 @@ from .request_sanitizer import sanitize_request_payload
 from .cooldown_manager import (
     CooldownManager,
     has_untried_peer_credentials,
+    raise_if_cooldown_exceeds_budget,
     should_apply_provider_cooldown_for_rate_limit_error,
 )
 from .credential_manager import CredentialManager
@@ -65,22 +66,6 @@ lib_logger = logging.getLogger("rotator_library")
 # Ensure the logger is configured to propagate to the root logger
 # which is set up in main.py. This allows the main app to control
 # log levels and handlers centrally.
-
-_COOLDOWN_BUDGET_EXCEEDED_MESSAGE = (
-    "No credentials were available within the remaining request budget."
-)
-
-
-def raise_if_cooldown_exceeds_budget(remaining_cooldown: float, remaining_budget: float) -> None:
-    if remaining_cooldown <= remaining_budget:
-        return
-    lib_logger.warning("Provider cooldown exceeds remaining request budget. Failing early.")
-    raise NoAvailableKeysError(
-        _COOLDOWN_BUDGET_EXCEEDED_MESSAGE,
-        code="acquisition_timeout_exhausted",
-        category="proxy_all_credentials_exhausted",
-        soonest_end=time.time() + remaining_cooldown,
-    )
 
 
 lib_logger.propagate = False

@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from credential_admission_contract_support import _MODEL, make_client  # noqa: E402
 from rotator_library.error_handler import NoAvailableKeysError  # noqa: E402
-from rotator_library.client import _COOLDOWN_BUDGET_EXCEEDED_MESSAGE  # noqa: E402
+from rotator_library.cooldown_manager import COOLDOWN_BUDGET_EXCEEDED_MESSAGE  # noqa: E402
 
 
 class _LongCooldownManager:
@@ -47,7 +47,7 @@ async def test_nonstream_fail_early_raises_exhausted_without_calling_upstream(
     assert called is False
     assert captured.value.category == "proxy_all_credentials_exhausted"
     assert captured.value.code == "acquisition_timeout_exhausted"
-    assert captured.value.message == _COOLDOWN_BUDGET_EXCEEDED_MESSAGE
+    assert captured.value.message == COOLDOWN_BUDGET_EXCEEDED_MESSAGE
     assert "synthetic" not in captured.value.message
     assert captured.value.soonest_end is not None
 
