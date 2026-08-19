@@ -18,7 +18,8 @@ class SSEStreamPolicy:
     cleanup_timeout_seconds: float = 1.0
 
 
-@dataclass(frozen=True, slots=True)
+# Not frozen: contextlib/anyio fail_after sets __traceback__ on raise.
+@dataclass(slots=True)
 class SSEStreamLimitExceeded(Exception):
     boundary: Literal["bytes", "events"]
 
@@ -26,7 +27,7 @@ class SSEStreamLimitExceeded(Exception):
         return f"response stream exceeded the {self.boundary} boundary"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class SSEStreamTimedOut(Exception):
     boundary: Literal["idle", "total"]
 

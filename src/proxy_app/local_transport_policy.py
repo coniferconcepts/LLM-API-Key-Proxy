@@ -48,7 +48,7 @@ def normalize_local_xai_base(configured: str) -> str:
             address = ip_address(normalized_host)
         except ValueError as exc:
             raise _invalid_local_xai_base("host must be localhost or a loopback IP") from exc
-        if not address.is_loopback:
+        if not address.is_loopback or getattr(address, "ipv4_mapped", None) is not None:
             raise _invalid_local_xai_base("host must be loopback")
         canonical_address = str(address)
         authority_host = f"[{canonical_address}]" if address.version == 6 else canonical_address

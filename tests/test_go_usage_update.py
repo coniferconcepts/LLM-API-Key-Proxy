@@ -76,7 +76,10 @@ async def test_unknown_status_retains_go_cooldown(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_eligibility_skips_go_cooldown_only(tmp_path: Path) -> None:
+async def test_eligibility_skips_go_cooldown_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("rotator_library.usage_manager.time.time", lambda: NOW_TS)
     manager = UsageManager(tmp_path / "usage.json")
     blocked = "sk-blocked"
     free = "sk-free"
