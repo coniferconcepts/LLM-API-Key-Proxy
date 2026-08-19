@@ -65,6 +65,24 @@ lib_logger = logging.getLogger("rotator_library")
 # Ensure the logger is configured to propagate to the root logger
 # which is set up in main.py. This allows the main app to control
 # log levels and handlers centrally.
+
+_COOLDOWN_BUDGET_EXCEEDED_MESSAGE = (
+    "No credentials were available within the remaining request budget."
+)
+
+
+def raise_if_cooldown_exceeds_budget(remaining_cooldown: float, remaining_budget: float) -> None:
+    if remaining_cooldown <= remaining_budget:
+        return
+    lib_logger.warning("Provider cooldown exceeds remaining request budget. Failing early.")
+    raise NoAvailableKeysError(
+        _COOLDOWN_BUDGET_EXCEEDED_MESSAGE,
+        code="acquisition_timeout_exhausted",
+        category="proxy_all_credentials_exhausted",
+        soonest_end=time.time() + remaining_cooldown,
+    )
+
+
 lib_logger.propagate = False
 
 
@@ -1479,13 +1497,7 @@ class RotatingClient:
                         provider
                     )
                     remaining_budget = deadline - time.time()
-
-                    # If the cooldown is longer than the remaining time budget, fail fast.
-                    if remaining_cooldown > remaining_budget:
-                        lib_logger.warning(
-                            f"Provider {provider} cooldown ({remaining_cooldown:.2f}s) exceeds remaining request budget ({remaining_budget:.2f}s). Failing early."
-                        )
-                        break
+                    raise_if_cooldown_exceeds_budget(remaining_cooldown, remaining_budget)
 
                     lib_logger.warning(
                         f"Provider {provider} is in cooldown. Waiting for {remaining_cooldown:.2f} seconds."
@@ -2226,11 +2238,7 @@ class RotatingClient:
                             provider
                         )
                         remaining_budget = deadline - time.time()
-                        if remaining_cooldown > remaining_budget:
-                            lib_logger.warning(
-                                f"Provider {provider} cooldown ({remaining_cooldown:.2f}s) exceeds remaining request budget ({remaining_budget:.2f}s). Failing early."
-                            )
-                            break
+                        raise_if_cooldown_exceeds_budget(remaining_cooldown, remaining_budget)
                         lib_logger.warning(
                             f"Provider {provider} is in a global cooldown. All requests to this provider will be paused for {remaining_cooldown:.2f} seconds."
                         )

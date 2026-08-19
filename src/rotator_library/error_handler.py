@@ -789,6 +789,13 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             error_type="api_connection", original_exception=e, status_code=status_code
         )
 
+    if status_code == 403:
+        return ClassifiedError(
+            error_type="forbidden",
+            original_exception=e,
+            status_code=status_code,
+        )
+
     if isinstance(e, PreRequestCallbackError):
         return ClassifiedError(
             error_type="pre_request_callback_error",
