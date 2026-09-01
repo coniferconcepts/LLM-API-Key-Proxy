@@ -9,7 +9,6 @@ from starlette.testclient import TestClient
 from rotator_library.client import RotatingClient
 from test_local_transport_safe_mode import _block_catalog_fetches, _import_proxy_main
 
-
 APPROVED_FIREWORKS_MODEL = "fireworks/accounts/fireworks/models/glm-5p3-flash"
 UNAPPROVED_FIREWORKS_MODEL = "fireworks/accounts/fireworks/models/not-approved"
 OTHER_FIREWORKS_MODEL = "fireworks/accounts/fireworks/models/second-exact-id"
