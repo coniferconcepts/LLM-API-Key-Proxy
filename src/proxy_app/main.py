@@ -17,6 +17,7 @@ if _LOCAL_SRC_PATH in sys.path:
     sys.path.remove(_LOCAL_SRC_PATH)
 sys.path.insert(0, _LOCAL_SRC_PATH)
 
+from proxy_app.client_override_guard import find_client_override
 from proxy_app.runtime_security import (
     RuntimeSecurityConfig,  # noqa: F401 - compatibility export
     build_allowed_hosts as _build_allowed_hosts,  # noqa: F401 - compatibility export
@@ -959,6 +960,13 @@ async def chat_completions(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON in request body.")
 
+        blocked_field = find_client_override(request_data)
+        if blocked_field is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Client-controlled routing or credential override is not allowed: {blocked_field}",
+            )
+
         normalized_headers = {name.lower(): value for name, value in request.headers.items()}
         try:
             bounded_authorization = validate_internal_request(
@@ -1138,6 +1146,14 @@ async def anthropic_messages(
         )
 
     try:
+        request_payload = getattr(request, "_json", body.model_dump(exclude_none=True))
+        blocked_field = find_client_override(request_payload)
+        if blocked_field is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Client-controlled routing or credential override is not allowed: {blocked_field}",
+            )
+
         # Log the request to console
         log_request_to_console(
             url=str(request.url),
@@ -1173,6 +1189,8 @@ async def anthropic_messages(
                 )
             return JSONResponse(content=result)
 
+    except HTTPException:
+        raise
     except (
         litellm.InvalidRequestError,
         ValueError,
@@ -1248,6 +1266,14 @@ async def embeddings(
     """
     try:
         request_data = body.model_dump(exclude_none=True)
+        request_payload = getattr(request, "_json", request_data)
+        blocked_field = find_client_override(request_payload)
+        if blocked_field is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Client-controlled routing or credential override is not allowed: {blocked_field}",
+            )
+
         log_request_to_console(
             url=str(request.url),
             headers=dict(request.headers),
