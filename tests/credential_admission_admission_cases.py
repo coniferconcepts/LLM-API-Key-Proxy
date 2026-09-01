@@ -11,10 +11,11 @@ from credential_admission_contract_support import (
     _MODEL,
     active_count,
     make_client,
+    make_usage_manager,
     observe_real_admission_wait,
 )
 from rotator_library.error_handler import NoAvailableKeysError
-from rotator_library.usage_manager import UsageManager, lib_logger
+from rotator_library.usage_manager import lib_logger
 
 
 @pytest.mark.asyncio
@@ -22,7 +23,7 @@ async def test_busy_admission_has_a_bounded_proxy_busy_error(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    client, manager = make_client(tmp_path, acquire_timeout=0.05)
+    client, manager = make_client(tmp_path, acquire_timeout=2.0)
     holder_entered_api = asyncio.Event()
     hold_request_open = asyncio.Event()
     original_log_level = lib_logger.level
@@ -46,7 +47,8 @@ async def test_busy_admission_has_a_bounded_proxy_busy_error(
         )
     )
     try:
-        await asyncio.wait_for(holder_entered_api.wait(), timeout=1.0)
+        await asyncio.wait_for(holder_entered_api.wait(), timeout=2.0)
+        client.acquire_timeout = 0.05
         waiter_blocked = observe_real_admission_wait(manager)
         started = asyncio.get_running_loop().time()
         with pytest.raises(NoAvailableKeysError) as captured:
@@ -88,10 +90,9 @@ async def test_busy_admission_has_a_bounded_proxy_busy_error(
 async def test_cooldown_only_admission_is_classified_as_credential_exhaustion(
     tmp_path: Path,
 ) -> None:
-    manager = UsageManager(str(tmp_path / "usage.json"))
+    manager = make_usage_manager(tmp_path)
     manager._usage_data = {_CREDENTIAL: {"key_cooldown_until": time.time() + 60.0}}  # noqa: SLF001
-    manager._initialized.set()  # noqa: SLF001
-    deadline = time.time() + 0.05
+    deadline = time.time() + 1.0
 
     with pytest.raises(NoAvailableKeysError) as captured:
         await manager.acquire_key(
@@ -110,9 +111,7 @@ async def test_cooldown_only_admission_is_classified_as_credential_exhaustion(
 async def test_expired_admission_budget_does_not_claim_unobserved_exhaustion(
     tmp_path: Path,
 ) -> None:
-    manager = UsageManager(str(tmp_path / "usage.json"))
-    manager._usage_data = {}  # noqa: SLF001
-    manager._initialized.set()  # noqa: SLF001
+    manager = make_usage_manager(tmp_path)
     expired_deadline = time.time() - 1.0
 
     with pytest.raises(NoAvailableKeysError) as captured:
@@ -131,9 +130,7 @@ async def test_expired_admission_budget_does_not_claim_unobserved_exhaustion(
 async def test_ollama_cloud_provider_pool_is_shared_across_models_and_releases(
     tmp_path: Path,
 ) -> None:
-    manager = UsageManager(str(tmp_path / "usage.json"))
-    manager._usage_data = {}  # noqa: SLF001
-    manager._initialized.set()  # noqa: SLF001
+    manager = make_usage_manager(tmp_path)
     credentials = ["synthetic-cloud-a", "synthetic-cloud-b"]
     models = [
         "ollama_cloud/glm-5.3-flash:cloud",
@@ -190,9 +187,7 @@ async def test_ollama_cloud_provider_pool_is_shared_across_models_and_releases(
 async def test_ollama_cloud_provider_pool_stays_at_six_with_extra_credentials(
     tmp_path: Path,
 ) -> None:
-    manager = UsageManager(str(tmp_path / "usage.json"))
-    manager._usage_data = {}  # noqa: SLF001
-    manager._initialized.set()  # noqa: SLF001
+    manager = make_usage_manager(tmp_path)
     credentials = ["synthetic-cloud-a", "synthetic-cloud-b", "synthetic-cloud-c"]
     acquired: list[tuple[str, str]] = []
     model = "ollama_cloud/glm-5.3-flash:cloud"

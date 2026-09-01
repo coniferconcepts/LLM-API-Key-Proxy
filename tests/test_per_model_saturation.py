@@ -16,7 +16,10 @@ from rotator_library.usage_manager import UsageManager  # noqa: E402
 
 
 def _manager(tmp_path: Path, name: str = "usage.json") -> UsageManager:
-    manager = UsageManager(str(tmp_path / name))
+    # Tests pin admission classification, not the 03:00 UTC daily-reset path.
+    # Leaving the default reset enabled can spend the short acquire budget on
+    # _save_usage and skip the loop, so cooling-only looks like proxy_busy.
+    manager = UsageManager(str(tmp_path / name), daily_reset_time_utc=None)
     manager._usage_data = {}  # noqa: SLF001
     manager._initialized.set()  # noqa: SLF001
     return manager
@@ -140,12 +143,15 @@ async def test_cooling_only_is_credential_exhaustion(tmp_path: Path) -> None:
         "fireworks-cooling": {"key_cooldown_until": time.time() + 60.0},
     }
 
+    # Budget stays far below the 60s cooldown so fail-fast still classifies
+    # exhaustion, but is long enough that pre-loop setup cannot skip the loop.
+    deadline = time.time() + 1.0
     with pytest.raises(NoAvailableKeysError) as captured:
         await manager.acquire_key(
             ["fireworks-cooling"],
             "fireworks/model-a",
-            time.time() + 0.05,
-            acquire_deadline=time.time() + 0.05,
+            deadline,
+            acquire_deadline=deadline,
             all_provider_credentials=["fireworks-cooling"],
         )
 

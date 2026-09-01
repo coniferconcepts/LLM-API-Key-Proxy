@@ -36,10 +36,16 @@ def active_count(manager: UsageManager) -> int:
     return 0 if state is None else int(state["models_in_use"].get(_MODEL, 0))
 
 
-def make_client(tmp_path: Path, *, acquire_timeout: float) -> tuple[RotatingClient, UsageManager]:
-    manager = UsageManager(str(tmp_path / "usage.json"))
+def make_usage_manager(tmp_path: Path, *, name: str = "usage.json") -> UsageManager:
+    # Admission tests are not about the 03:00 UTC daily-reset save path.
+    manager = UsageManager(str(tmp_path / name), daily_reset_time_utc=None)
     manager._usage_data = {}  # noqa: SLF001
     manager._initialized.set()  # noqa: SLF001
+    return manager
+
+
+def make_client(tmp_path: Path, *, acquire_timeout: float) -> tuple[RotatingClient, UsageManager]:
+    manager = make_usage_manager(tmp_path)
 
     async def record_success(
         _credential: str,
