@@ -42,9 +42,7 @@ class TimeoutConfig:
             try:
                 return float(value)
             except ValueError:
-                lib_logger.warning(
-                    f"Invalid value for {key}: {value}. Using default: {default}"
-                )
+                lib_logger.warning(f"Invalid value for {key}: {value}. Using default: {default}")
         return default
 
     @classmethod
@@ -71,6 +69,20 @@ class TimeoutConfig:
     def read_non_streaming(cls) -> float:
         """Read timeout for non-streaming responses."""
         return cls._get_env_float("TIMEOUT_READ_NON_STREAMING", cls._READ_NON_STREAMING)
+
+    @classmethod
+    def litellm_timeout_seconds(cls, *, stream: bool) -> float:
+        """Seconds forwarded to LiteLLM `timeout` (SDK honors this on 1.94.0+)."""
+        return cls.read_streaming() if stream else cls.read_non_streaming()
+
+    @classmethod
+    def apply_litellm_timeout(cls, kwargs: dict) -> dict:
+        """Copy kwargs and set `timeout` unless the caller already set one."""
+        if "timeout" in kwargs:
+            return kwargs
+        out = dict(kwargs)
+        out["timeout"] = cls.litellm_timeout_seconds(stream=bool(out.get("stream")))
+        return out
 
     @classmethod
     def streaming(cls) -> httpx.Timeout:
