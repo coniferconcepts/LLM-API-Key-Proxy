@@ -21,6 +21,19 @@ from .usage_persistence import (
     add_readable_timestamps,
     safe_usage_data_for_persistence,
 )
+from .usage_concurrency import (
+    OLLAMA_CLOUD_PROVIDER,
+    ProviderPoolTracker,
+    enforce_admission_limits,
+    provider_from_model,
+    provider_pool_capacity,
+    reserve_ollama_cloud_slot,
+)
+from .usage_custom_caps import (
+    model_quota_group_for_provider,
+    resolve_custom_cap_config,
+    resolve_custom_cap_max,
+)
 from .usage_provider_state import provider_from_credential
 from .usage_selection import select_weighted_random
 from .config import (
@@ -166,6 +179,7 @@ class UsageManager:
         self._cycle_exhausted: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
 
         self._data_lock = asyncio.Lock()
+        self._provider_pool = ProviderPoolTracker()
         self._usage_data: Optional[Dict] = None
         self._initialized = asyncio.Event()
         self._init_lock = asyncio.Lock()
@@ -268,86 +282,16 @@ class UsageManager:
         tier_priority: int,
         model: str,
     ) -> Optional[Dict[str, Any]]:
-        """
-        Get custom cap config for a provider/tier/model combination.
-
-        Resolution order:
-        1. tier + model (exact match)
-        2. tier + group (model's quota group)
-        3. "default" + model
-        4. "default" + group
-
-        Args:
-            provider: Provider name
-            tier_priority: Credential's priority level
-            model: Model name (with provider prefix)
-
-        Returns:
-            Cap config dict or None if no custom cap applies
-        """
-        provider_caps = self.custom_caps.get(provider)
-        if not provider_caps:
-            return None
-
-        # Strip provider prefix from model
         clean_model = model.split("/")[-1] if "/" in model else model
-
-        # Get quota group for this model
-        group = self._get_model_quota_group_by_provider(provider, model)
-
-        # Try to find matching tier config
-        tier_config = None
-        default_config = None
-
-        for tier_key, models_config in provider_caps.items():
-            if tier_key == "default":
-                default_config = models_config
-                continue
-
-            # Check if this tier_key matches our priority
-            if isinstance(tier_key, int) and tier_key == tier_priority:
-                tier_config = models_config
-                break
-            elif isinstance(tier_key, tuple) and tier_priority in tier_key:
-                tier_config = models_config
-                break
-
-        # Resolution order for tier config
-        if tier_config:
-            # Try model first
-            if clean_model in tier_config:
-                return tier_config[clean_model]
-            # Try group
-            if group and group in tier_config:
-                return tier_config[group]
-
-        # Resolution order for default config
-        if default_config:
-            # Try model first
-            if clean_model in default_config:
-                return default_config[clean_model]
-            # Try group
-            if group and group in default_config:
-                return default_config[group]
-
-        return None
+        return resolve_custom_cap_config(
+            self.custom_caps.get(provider),
+            tier_priority=tier_priority,
+            clean_model=clean_model,
+            group=self._get_model_quota_group_by_provider(provider, model),
+        )
 
     def _get_model_quota_group_by_provider(self, provider: str, model: str) -> Optional[str]:
-        """
-        Get quota group for a model using provider name instead of credential.
-
-        Args:
-            provider: Provider name
-            model: Model name
-
-        Returns:
-            Group name or None
-        """
-        plugin_instance = self._get_provider_instance(provider)
-        if plugin_instance and hasattr(plugin_instance, "get_model_quota_group"):
-            group = plugin_instance.get_model_quota_group(model)
-            return group if isinstance(group, str) else None
-        return None
+        return model_quota_group_for_provider(self._get_provider_instance(provider), model)
 
     def _resolve_custom_cap_max(
         self,
@@ -356,50 +300,7 @@ class UsageManager:
         cap_config: Dict[str, Any],
         actual_max: Optional[int],
     ) -> Optional[int]:
-        """
-        Resolve custom cap max_requests value, handling percentages and clamping.
-
-        Args:
-            provider: Provider name
-            model: Model name (for logging)
-            cap_config: Custom cap configuration
-            actual_max: Actual API max requests (may be None if unknown)
-
-        Returns:
-            Resolved cap value (clamped), or None if can't be calculated
-        """
-        max_requests = cap_config.get("max_requests")
-        if max_requests is None:
-            return None
-
-        # Handle percentage
-        if isinstance(max_requests, str) and max_requests.endswith("%"):
-            if actual_max is None:
-                lib_logger.warning(
-                    f"Custom cap '{max_requests}' for {provider}/{model} requires known max_requests. "
-                    f"Skipping until quota baseline is fetched. Use absolute value for immediate enforcement."
-                )
-                return None
-            try:
-                percentage = float(max_requests.rstrip("%")) / 100.0
-                calculated = int(actual_max * percentage)
-            except ValueError:
-                lib_logger.warning(
-                    f"Invalid percentage cap '{max_requests}' for {provider}/{model}"
-                )
-                return None
-        else:
-            # Absolute value
-            try:
-                calculated = int(max_requests)
-            except (ValueError, TypeError):
-                lib_logger.warning(f"Invalid cap value '{max_requests}' for {provider}/{model}")
-                return None
-
-        # Clamp to actual max (can only be MORE restrictive)
-        if actual_max is not None:
-            return min(calculated, actual_max)
-        return calculated
+        return resolve_custom_cap_max(provider, model, cap_config, actual_max)
 
     def _calculate_custom_cooldown_until(
         self,
@@ -2018,6 +1919,9 @@ class UsageManager:
         normalized_model = (
             self._normalize_model(available_keys[0], model) if available_keys else model
         )
+        provider = provider_from_model(model)
+        provider_credentials = list(dict.fromkeys(all_provider_credentials or available_keys))
+        pool_capacity = provider_pool_capacity(provider, len(provider_credentials), max_concurrent)
 
         # Use acquire_deadline for the acquisition loop if provided, otherwise use deadline
         acquisition_deadline = acquire_deadline if acquire_deadline is not None else deadline
@@ -2029,6 +1933,24 @@ class UsageManager:
         # This loop continues as long as the acquisition deadline has not been met.
         while time.time() < acquisition_deadline:
             now = time.time()
+
+            await enforce_admission_limits(
+                provider=provider,
+                model=model,
+                available_keys=available_keys,
+                usage_data=usage_data,
+                key_states=self.key_states,
+                data_lock=self._data_lock,
+                tracker=self._provider_pool,
+                normalized_model=normalized_model,
+                now=now,
+                max_concurrent=max_concurrent,
+                credential_priorities=credential_priorities,
+                rotation_mode=self._get_rotation_mode(provider),
+                priority_multiplier=self._get_priority_multiplier,
+                active_key_block=_active_key_block,
+                pool_capacity=pool_capacity,
+            )
 
             # Group credentials by priority level (if priorities provided)
             if credential_priorities:
@@ -2156,6 +2078,9 @@ class UsageManager:
                         state = self.key_states[key]
                         async with state["lock"]:
                             if not state["models_in_use"]:
+                                await reserve_ollama_cloud_slot(
+                                    self._provider_pool, provider, model, pool_capacity
+                                )
                                 state["models_in_use"][model] = 1
                                 tier_name = (
                                     credential_tier_names.get(key, "unknown")
@@ -2175,6 +2100,9 @@ class UsageManager:
                         async with state["lock"]:
                             current_count = state["models_in_use"].get(model, 0)
                             if current_count < effective_max_concurrent:
+                                await reserve_ollama_cloud_slot(
+                                    self._provider_pool, provider, model, pool_capacity
+                                )
                                 state["models_in_use"][model] = current_count + 1
                                 tier_name = (
                                     credential_tier_names.get(key, "unknown")
@@ -2356,6 +2284,9 @@ class UsageManager:
                     state = self.key_states[key]
                     async with state["lock"]:
                         if not state["models_in_use"]:
+                            await reserve_ollama_cloud_slot(
+                                self._provider_pool, provider, model, pool_capacity
+                            )
                             state["models_in_use"][model] = 1
                             optional_tier_name = (
                                 credential_tier_names.get(key) if credential_tier_names else None
@@ -2376,6 +2307,9 @@ class UsageManager:
                     async with state["lock"]:
                         current_count = state["models_in_use"].get(model, 0)
                         if current_count < effective_max_concurrent:
+                            await reserve_ollama_cloud_slot(
+                                self._provider_pool, provider, model, pool_capacity
+                            )
                             state["models_in_use"][model] = current_count + 1
                             optional_tier_name = (
                                 credential_tier_names.get(key) if credential_tier_names else None
@@ -2515,12 +2449,14 @@ class UsageManager:
             return
 
         state = self.key_states[key]
+        released = False
         async with state["lock"]:
             if model in state["models_in_use"]:
                 state["models_in_use"][model] -= 1
                 remaining = state["models_in_use"][model]
                 if remaining <= 0:
                     del state["models_in_use"][model]  # Clean up when count reaches 0
+                released = True
                 lib_logger.info(
                     f"Released credential {mask_credential(key)} from model {model} "
                     f"(remaining concurrent: {max(0, remaining)})"
@@ -2529,6 +2465,10 @@ class UsageManager:
                 lib_logger.warning(
                     f"Attempted to release credential {mask_credential(key)} for model {model}, but it was not in use."
                 )
+
+        provider = provider_from_model(model)
+        if released and provider == OLLAMA_CLOUD_PROVIDER:
+            await self._provider_pool.release(provider)
 
         # Notify all tasks waiting on this key's condition
         async with state["condition"]:
@@ -3118,7 +3058,7 @@ class UsageManager:
         usage_data = self._usage_data
         assert usage_data is not None
         async with self._data_lock:
-            return summarize_go_eligibility(usage_data, credentials, now=clock)
+            return dict(summarize_go_eligibility(usage_data, credentials, now=clock))
 
     async def update_quota_baseline(
         self,

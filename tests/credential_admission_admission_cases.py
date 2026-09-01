@@ -125,3 +125,103 @@ async def test_expired_admission_budget_does_not_claim_unobserved_exhaustion(
         )
 
     assert captured.value.category == "proxy_busy"
+
+
+@pytest.mark.asyncio
+async def test_ollama_cloud_provider_pool_is_shared_across_models_and_releases(
+    tmp_path: Path,
+) -> None:
+    manager = UsageManager(str(tmp_path / "usage.json"))
+    manager._usage_data = {}  # noqa: SLF001
+    manager._initialized.set()  # noqa: SLF001
+    credentials = ["synthetic-cloud-a", "synthetic-cloud-b"]
+    models = [
+        "ollama_cloud/glm-5.3-flash:cloud",
+        "ollama_cloud/kimi-k2.7-code:cloud",
+    ]
+    acquired: list[tuple[str, str]] = []
+
+    for index in range(6):
+        model = models[index % len(models)]
+        key = await manager.acquire_key(
+            credentials,
+            model,
+            time.time() + 1,
+            acquire_deadline=time.time() + 1,
+            max_concurrent=3,
+            all_provider_credentials=credentials,
+        )
+        acquired.append((key, model))
+
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(NoAvailableKeysError) as captured:
+        await manager.acquire_key(
+            credentials,
+            "ollama_cloud/minimax-m3:cloud",
+            time.time() + 10,
+            acquire_deadline=time.time() + 10,
+            max_concurrent=3,
+            all_provider_credentials=credentials,
+        )
+    assert captured.value.category == "proxy_busy"
+    assert asyncio.get_running_loop().time() - started < 0.2
+
+    released_key, released_model = acquired.pop()
+    await manager.release_key(released_key, released_model)
+    replacement_model = "ollama_cloud/qwen3.5:397b"
+    leaked_key, leaked_model = acquired.pop()
+    await manager.release_key(leaked_key, leaked_model)
+    replacement_key = await manager.acquire_key(
+        credentials,
+        replacement_model,
+        time.time() + 1,
+        acquire_deadline=time.time() + 1,
+        max_concurrent=3,
+        all_provider_credentials=credentials,
+    )
+    acquired.append((replacement_key, replacement_model))
+
+    for key, held_model in acquired:
+        await manager.release_key(key, held_model)
+    assert manager._provider_pool.in_use("ollama_cloud") == 0  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_ollama_cloud_provider_pool_stays_at_six_with_extra_credentials(
+    tmp_path: Path,
+) -> None:
+    manager = UsageManager(str(tmp_path / "usage.json"))
+    manager._usage_data = {}  # noqa: SLF001
+    manager._initialized.set()  # noqa: SLF001
+    credentials = ["synthetic-cloud-a", "synthetic-cloud-b", "synthetic-cloud-c"]
+    acquired: list[tuple[str, str]] = []
+    model = "ollama_cloud/glm-5.3-flash:cloud"
+
+    for _ in range(6):
+        key = await manager.acquire_key(
+            credentials,
+            model,
+            time.time() + 1,
+            acquire_deadline=time.time() + 1,
+            max_concurrent=3,
+            all_provider_credentials=credentials,
+        )
+        acquired.append((key, model))
+
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(NoAvailableKeysError) as captured:
+        await manager.acquire_key(
+            credentials,
+            "ollama_cloud/minimax-m3:cloud",
+            time.time() + 10,
+            acquire_deadline=time.time() + 10,
+            max_concurrent=3,
+            all_provider_credentials=credentials,
+        )
+    assert captured.value.category == "proxy_busy"
+    assert captured.value.diagnostics["provider_pool_capacity"] == 6
+    assert asyncio.get_running_loop().time() - started < 0.2
+
+    for key, held_model in acquired:
+        await manager.release_key(key, held_model)
+    assert manager._provider_pool.in_use("ollama_cloud") == 0  # noqa: SLF001

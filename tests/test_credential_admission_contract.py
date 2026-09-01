@@ -7,6 +7,12 @@ from credential_admission_admission_cases import (
 from credential_admission_admission_cases import (
     test_expired_admission_budget_does_not_claim_unobserved_exhaustion,
 )
+from credential_admission_admission_cases import (
+    test_ollama_cloud_provider_pool_is_shared_across_models_and_releases,
+)
+from credential_admission_admission_cases import (
+    test_ollama_cloud_provider_pool_stays_at_six_with_extra_credentials,
+)
 from credential_admission_cancellation_cases import (
     test_client_cancellation_releases_permit_and_next_request_recovers,
 )
