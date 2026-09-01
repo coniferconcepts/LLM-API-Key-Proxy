@@ -15,7 +15,7 @@ from litellm.exceptions import APIConnectionError
 from litellm.litellm_core_utils.token_counter import token_counter
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, AsyncGenerator, Final, Optional, TYPE_CHECKING, Union, Tuple
+from typing import List, Dict, Any, AsyncGenerator, Optional, TYPE_CHECKING, Union, Tuple
 
 from .usage_manager import UsageManager
 from .failure_logger import log_failure, configure_failure_logger
@@ -44,6 +44,7 @@ from .cooldown_manager import (
 from .credential_manager import CredentialManager
 from .background_refresher import BackgroundRefresher
 from .model_definitions import ModelDefinitions
+from . import fireworks_admission as _fa
 from .openrouter_headers import _merge_openrouter_extra_headers
 from .routing_policy import RouteDecision, RoutingPolicy, RoutingPolicyError
 from .transaction_logger import TransactionLogger
@@ -69,24 +70,6 @@ lib_logger = logging.getLogger("rotator_library")
 
 
 lib_logger.propagate = False
-
-FIREWORKS_PROVIDER: Final = "fireworks"
-APPROVED_FIREWORKS_MODEL: Final = "fireworks/accounts/fireworks/models/glm-5p3-flash"
-
-
-def is_model_admitted(model: str) -> bool:
-    if not model.startswith(f"{FIREWORKS_PROVIDER}/"):
-        return True
-
-    configured = os.environ.get("WHITELIST_MODELS_FIREWORKS")
-    if configured is not None and configured not in {"", APPROVED_FIREWORKS_MODEL}:
-        raise ValueError(
-            "WHITELIST_MODELS_FIREWORKS must be unset, empty, or exactly "
-            f"'{APPROVED_FIREWORKS_MODEL}'."
-        )
-    if configured == "":
-        return False
-    return model == APPROVED_FIREWORKS_MODEL
 
 
 def _safe_request_headers(request: Any) -> Dict[str, str]:
@@ -2889,16 +2872,7 @@ class RotatingClient:
         Returns:
             The completion response object, or an async generator for streaming responses, or None if all retries fail.
         """
-        model = kwargs.get("model", "")
-        if model:
-            routed_model, route_decision = self._apply_routing_policy(model)
-            if routed_model != model:
-                kwargs["model"] = routed_model
-                model = routed_model
-                self._log_route_decision(route_decision)
-
-        if not is_model_admitted(model):
-            raise ValueError("Fireworks model is not admitted by the exact-ID policy.")
+        model = _fa.admit(kwargs, self._apply_routing_policy, self._log_route_decision)
 
         # Handle iflow provider: remove stream_options to avoid HTTP 406
         provider = model.split("/")[0] if "/" in model else ""
@@ -2945,16 +2919,7 @@ class RotatingClient:
         Returns:
             The embedding response object, or None if all retries fail.
         """
-        model = kwargs.get("model", "")
-        if model:
-            routed_model, route_decision = self._apply_routing_policy(model)
-            if routed_model != model:
-                kwargs["model"] = routed_model
-                model = routed_model
-                self._log_route_decision(route_decision)
-
-        if not is_model_admitted(model):
-            raise ValueError("Fireworks model is not admitted by the exact-ID policy.")
+        _fa.admit(kwargs, self._apply_routing_policy, self._log_route_decision)
 
         return self._execute_with_retry(
             litellm.aembedding,
@@ -3008,7 +2973,7 @@ class RotatingClient:
     async def get_available_models(self, provider: str) -> List[str]:
         """Returns a list of available models for a specific provider, with caching."""
         lib_logger.info(f"Getting available models for provider: {provider}")
-        if provider == FIREWORKS_PROVIDER and not is_model_admitted(APPROVED_FIREWORKS_MODEL):
+        if _fa.fireworks_catalog_unavailable(provider):
             return []
         if provider in self._model_list_cache:
             lib_logger.debug(f"Returning cached models for provider: {provider}")
@@ -3040,19 +3005,15 @@ class RotatingClient:
                     lib_logger.info(f"Got {len(models)} models for provider: {provider}")
 
                     # Whitelist and blacklist logic
-                    final_models = []
-                    for m in models:
-                        if not is_model_admitted(m):
-                            continue
-                        is_whitelisted = self._is_model_whitelisted(provider, m)
-                        is_blacklisted = self._is_model_ignored(provider, m)
-
-                        if is_whitelisted:
-                            final_models.append(m)
-                            continue
-
-                        if not is_blacklisted:
-                            final_models.append(m)
+                    final_models = [
+                        m
+                        for m in models
+                        if _fa.is_model_admitted(m)
+                        and (
+                            self._is_model_whitelisted(provider, m)
+                            or not self._is_model_ignored(provider, m)
+                        )
+                    ]
 
                     if len(final_models) != len(models):
                         lib_logger.info(
@@ -3081,8 +3042,8 @@ class RotatingClient:
         lib_logger.info("Getting all available models...")
 
         all_providers = list(self.all_credentials.keys())
-        if FIREWORKS_PROVIDER in all_providers:
-            is_model_admitted(APPROVED_FIREWORKS_MODEL)
+        if _fa.FIREWORKS_PROVIDER in all_providers:
+            _fa.validate_fireworks_admission_config()
         tasks = [self.get_available_models(provider) for provider in all_providers]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
