@@ -14,6 +14,7 @@ from .schema import GoUsageError, normalize_usage
 
 DEFAULT_BASE: Final = "https://opencode.ai/zen/go/v1"
 USER_AGENT: Final = "opencode-router-go-usage-probe/1"
+SESSION_HEADER: Final = "opencode-router-go-usage"
 DEFAULT_TIMEOUT: Final = 15.0
 DEFAULT_MAX_BYTES: Final = 64 * 1024
 
@@ -45,6 +46,7 @@ async def fetch_usage(
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": USER_AGENT,
+                "x-opencode-session": SESSION_HEADER,
             },
             timeout=timeout,
             follow_redirects=False,
