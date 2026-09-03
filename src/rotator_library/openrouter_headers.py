@@ -21,7 +21,12 @@ _SESSION_HEADER_KEYS: Final = (
 _GO_PROVIDERS: Final = frozenset({"opencode_go", "opencode_go_messages"})
 _XAI_PROVIDERS: Final = frozenset({"xai", "xai_oauth"})
 _FIREWORKS_PROVIDERS: Final = frozenset({"fireworks"})
-_OPENROUTER_PROVIDERS: Final = frozenset({"openrouter", "openrouter_zdr", "openrouter_non_zdr"})
+_OPENROUTER_PROVIDERS: Final = frozenset(
+    {"openrouter", "openrouter_zdr", "openrouter_non_zdr", "openrouter_free"}
+)
+_BLOCKED_EXTRA_HEADER_KEYS: Final = frozenset(
+    {"authorization", "proxy-authorization", "cookie", "x-api-key"}
+)
 
 
 class _RequestWithHeaders(Protocol):
@@ -57,6 +62,7 @@ def _resolve_session(request: _RequestWithHeaders | None) -> str:
         value = _get_request_header(request, key)
         if value:
             return value
+    # Test doubles (and optional ASGI attrs) may set request_id; FastAPI Request does not.
     request_id = getattr(request, "request_id", None)
     if isinstance(request_id, str) and not any(char in request_id for char in "\r\n\x00"):
         validated_request_id = request_id.strip()
@@ -73,7 +79,11 @@ def merge_provider_extra_headers(
     request: _RequestWithHeaders | None,
     provider: str,
 ) -> _LiteLLMKwargsT:
-    extra_headers = dict(litellm_kwargs.get("extra_headers") or {})
+    extra_headers = {
+        name: value
+        for name, value in dict(litellm_kwargs.get("extra_headers") or {}).items()
+        if name.casefold() not in _BLOCKED_EXTRA_HEADER_KEYS
+    }
     session = _resolve_session(request)
     mapped_headers: dict[str, str] = {}
     provider_name = provider.casefold()
@@ -94,16 +104,10 @@ def merge_provider_extra_headers(
             if value:
                 mapped_headers[key] = value
 
-    for key, value in mapped_headers.items():
-        if all(name.casefold() != key.casefold() for name in extra_headers):
-            extra_headers[key] = value
-    if extra_headers:
-        litellm_kwargs["extra_headers"] = extra_headers
+    mapped_names = {key.casefold() for key in mapped_headers}
+    extra_headers = {
+        name: value for name, value in extra_headers.items() if name.casefold() not in mapped_names
+    }
+    extra_headers.update(mapped_headers)
+    litellm_kwargs["extra_headers"] = extra_headers
     return litellm_kwargs
-
-
-def _merge_openrouter_extra_headers(
-    litellm_kwargs: _LiteLLMKwargsT,
-    request: _RequestWithHeaders | None,
-) -> _LiteLLMKwargsT:
-    return merge_provider_extra_headers(litellm_kwargs, request, "openrouter")

@@ -51,20 +51,25 @@ provider-specific cache-affinity headers:
 | OpenCode GO (`opencode_go`, `opencode_go_messages`) | `x-opencode-session`; `x-opencode-client: opencode-router`; `User-Agent: opencode-router-mirrowel/1` |
 | xAI (`xai`, `xai_oauth`) | `x-grok-conv-id` |
 | Fireworks | `x-session-affinity` |
-| OpenRouter (`openrouter`, `openrouter_zdr`, `openrouter_non_zdr`) | `x-session-id` plus `HTTP-Referer`, `X-OpenRouter-Title`, `X-Title`, and `X-OpenRouter-Categories` when present |
+| OpenRouter (`openrouter`, `openrouter_zdr`, `openrouter_non_zdr`, `openrouter_free`) | `x-session-id` plus `HTTP-Referer`, `X-OpenRouter-Title`, `X-Title`, and `X-OpenRouter-Categories` when present |
 
 At the weighted-router boundary, session resolution checks
 `x-opencode-session`, `x-session-id`, `x-conversation-id`, and
 `x-grok-conv-id`, then the validated or generated request ID, then a raw
-`x-request-id`. Mirrowel uses the same order, with `request.request_id` as its
-validated or generated request ID. Both boundaries generate a UUID when every
-source is absent or invalid.
+`x-request-id`. Mirrowel uses the same order. `request.request_id` is a
+test-double / optional ASGI attribute (Starlette `Request` has none); production
+falls through to HTTP aliases then UUID. Both boundaries generate a UUID when
+every source is absent or invalid.
 
 Header names are matched case-insensitively. For each alias, the first
 non-empty occurrence wins after surrounding whitespace is stripped; values
 containing CR, LF, or NUL are rejected. Raw aliases are canonicalized at the
-weighted-router hop. Inbound `Authorization` is never copied into LiteLLM
-`extra_headers`; provider authentication remains independently managed.
+weighted-router hop. Mapped provider headers overwrite same-name keys in body
+`extra_headers` (case-insensitive). Non-mapped extra headers still pass through.
+Inbound `Authorization`, `Proxy-Authorization`, `Cookie`, and `X-Api-Key` are
+never copied into LiteLLM `extra_headers`; provider authentication remains
+independently managed. HTTP session aliases are the contract — body-only
+`extra_headers` session values do not win.
 
 ## `RotatingClient` Class
 

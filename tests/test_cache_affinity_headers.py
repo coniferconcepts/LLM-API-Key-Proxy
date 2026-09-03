@@ -72,7 +72,7 @@ def test_go_headers_add_router_identity() -> None:
         ("openrouter", {}),
     ],
 )
-def test_existing_provider_header_is_not_overwritten(
+def test_existing_provider_header_is_overwritten_by_derived(
     provider: str, expected_additions: dict[str, str]
 ) -> None:
     # Given a caller-supplied provider header using mixed casing.
@@ -89,8 +89,17 @@ def test_existing_provider_header_is_not_overwritten(
         {"extra_headers": {existing_key: "caller-value"}}, request, provider
     )
 
-    # Then the caller's value remains authoritative.
-    assert result["extra_headers"] == {existing_key: "caller-value", **expected_additions}
+    # Then the request-derived value replaces the mixed-case body value.
+    expected_key = {
+        "opencode_go": "x-opencode-session",
+        "xai_oauth": "x-grok-conv-id",
+        "fireworks": "x-session-affinity",
+        "openrouter": "x-session-id",
+    }[provider]
+    assert result["extra_headers"] == {
+        expected_key: "inbound-session",
+        **expected_additions,
+    }
 
 
 @pytest.mark.parametrize(

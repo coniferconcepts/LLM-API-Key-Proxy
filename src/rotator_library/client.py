@@ -45,7 +45,6 @@ from .credential_manager import CredentialManager
 from .background_refresher import BackgroundRefresher
 from .model_definitions import ModelDefinitions
 from . import fireworks_admission as _fa
-from . import openrouter_headers as _openrouter_headers
 from .openrouter_headers import merge_provider_extra_headers
 from .routing_policy import RouteDecision, RoutingPolicy, RoutingPolicyError
 from .transaction_logger import TransactionLogger
@@ -65,7 +64,6 @@ if TYPE_CHECKING:
     from .anthropic_compat import AnthropicCountTokensRequest, AnthropicMessagesRequest
 
 lib_logger = logging.getLogger("rotator_library")
-_merge_openrouter_extra_headers = _openrouter_headers._merge_openrouter_extra_headers
 # Ensure the logger is configured to propagate to the root logger
 # which is set up in main.py. This allows the main app to control
 # log levels and handlers centrally.

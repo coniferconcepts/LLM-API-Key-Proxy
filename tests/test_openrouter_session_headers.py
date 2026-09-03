@@ -35,7 +35,9 @@ def make_headers(values: list[tuple[str, str]]) -> Message:
     return headers
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "openrouter_zdr", "openrouter_non_zdr"])
+@pytest.mark.parametrize(
+    "provider", ["openrouter", "openrouter_zdr", "openrouter_non_zdr", "openrouter_free"]
+)
 def test_openrouter_family_receives_session_and_attribution(provider: str) -> None:
     request = Request(
         {
