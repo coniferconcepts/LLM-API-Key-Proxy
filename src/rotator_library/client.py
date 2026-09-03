@@ -45,7 +45,8 @@ from .credential_manager import CredentialManager
 from .background_refresher import BackgroundRefresher
 from .model_definitions import ModelDefinitions
 from . import fireworks_admission as _fa
-from .openrouter_headers import _merge_openrouter_extra_headers
+from . import openrouter_headers as _openrouter_headers
+from .openrouter_headers import merge_provider_extra_headers
 from .routing_policy import RouteDecision, RoutingPolicy, RoutingPolicyError
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir
@@ -64,6 +65,7 @@ if TYPE_CHECKING:
     from .anthropic_compat import AnthropicCountTokensRequest, AnthropicMessagesRequest
 
 lib_logger = logging.getLogger("rotator_library")
+_merge_openrouter_extra_headers = _openrouter_headers._merge_openrouter_extra_headers
 # Ensure the logger is configured to propagate to the root logger
 # which is set up in main.py. This allows the main app to control
 # log levels and handlers centrally.
@@ -1784,8 +1786,7 @@ class RotatingClient:
                         ]
 
                     litellm_kwargs = sanitize_request_payload(litellm_kwargs, model)
-                    if provider == "openrouter":
-                        litellm_kwargs = _merge_openrouter_extra_headers(litellm_kwargs, request)
+                    litellm_kwargs = merge_provider_extra_headers(litellm_kwargs, request, provider)
 
                     for attempt in range(self.max_retries):
                         try:
@@ -2542,8 +2543,7 @@ class RotatingClient:
                         ]
 
                     litellm_kwargs = sanitize_request_payload(litellm_kwargs, model)
-                    if provider == "openrouter":
-                        litellm_kwargs = _merge_openrouter_extra_headers(litellm_kwargs, request)
+                    litellm_kwargs = merge_provider_extra_headers(litellm_kwargs, request, provider)
 
                     # If the provider is 'qwen_code', set the custom provider to 'qwen'
                     # and strip the prefix from the model name for LiteLLM.

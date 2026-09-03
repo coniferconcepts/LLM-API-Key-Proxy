@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 client_module = importlib.import_module("rotator_library.client")
+headers_module = importlib.import_module("rotator_library.openrouter_headers")
 routing_policy_module = importlib.import_module("rotator_library.routing_policy")
 
 RotatingClient = getattr(client_module, "RotatingClient")
@@ -27,6 +28,17 @@ def test_openrouter_header_merge_has_dedicated_module_boundary():
 
     # Then header adaptation remains outside the oversized client module.
     assert owner == "rotator_library.openrouter_headers"
+
+
+def test_session_header_alias_order_is_pinned():
+    # request.request_id intentionally ranks before the tuple's final raw x-request-id.
+    assert headers_module._SESSION_HEADER_KEYS == (
+        "x-opencode-session",
+        "x-session-id",
+        "x-conversation-id",
+        "x-grok-conv-id",
+        "x-request-id",
+    )
 
 
 def test_client_helper_rewrites_weighted_router_model():
@@ -172,6 +184,7 @@ def test_unknown_prefixed_provider_error_keeps_standard_message():
 def test_merge_openrouter_extra_headers_copies_attribution_from_request():
     class Request:
         headers = {
+            "Authorization": "Bearer inbound-secret",
             "HTTP-Referer": "https://opencode.ai",
             "X-OpenRouter-Title": "OpenCode/opencode-router",
             "X-Title": "OpenCode/opencode-router",
@@ -184,6 +197,7 @@ def test_merge_openrouter_extra_headers_copies_attribution_from_request():
     assert kwargs["extra_headers"]["X-OpenRouter-Title"] == "OpenCode/opencode-router"
     assert kwargs["extra_headers"]["X-Title"] == "OpenCode/opencode-router"
     assert kwargs["extra_headers"]["X-OpenRouter-Categories"] == "cli-agent"
+    assert not any(key.casefold() == "authorization" for key in kwargs["extra_headers"])
 
 
 def test_merge_openrouter_extra_headers_preserves_existing_values():

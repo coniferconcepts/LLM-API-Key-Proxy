@@ -41,6 +41,31 @@ To install the library, you can install it directly from a local path. Using the
 pip install -e .
 ```
 
+## Provider header contract
+
+Mirrowel derives one safe session value at the provider boundary and maps it to
+provider-specific cache-affinity headers:
+
+| Provider family | Outbound headers |
+| --- | --- |
+| OpenCode GO (`opencode_go`, `opencode_go_messages`) | `x-opencode-session`; `x-opencode-client: opencode-router`; `User-Agent: opencode-router-mirrowel/1` |
+| xAI (`xai`, `xai_oauth`) | `x-grok-conv-id` |
+| Fireworks | `x-session-affinity` |
+| OpenRouter (`openrouter`, `openrouter_zdr`, `openrouter_non_zdr`) | `x-session-id` plus `HTTP-Referer`, `X-OpenRouter-Title`, `X-Title`, and `X-OpenRouter-Categories` when present |
+
+At the weighted-router boundary, session resolution checks
+`x-opencode-session`, `x-session-id`, `x-conversation-id`, and
+`x-grok-conv-id`, then the validated or generated request ID, then a raw
+`x-request-id`. Mirrowel uses the same order, with `request.request_id` as its
+validated or generated request ID. Both boundaries generate a UUID when every
+source is absent or invalid.
+
+Header names are matched case-insensitively. For each alias, the first
+non-empty occurrence wins after surrounding whitespace is stripped; values
+containing CR, LF, or NUL are rejected. Raw aliases are canonicalized at the
+weighted-router hop. Inbound `Authorization` is never copied into LiteLLM
+`extra_headers`; provider authentication remains independently managed.
+
 ## `RotatingClient` Class
 
 This is the main class for interacting with the library. It is designed to be a long-lived object that manages the state of your API key pool.
@@ -342,4 +367,3 @@ The system will automatically discover and register your new provider.
 ## Detailed Documentation
 
 For a more in-depth technical explanation of the library's architecture, including the `UsageManager`'s concurrency model and the error classification system, please refer to the [Technical Documentation](../../DOCUMENTATION.md).
-
