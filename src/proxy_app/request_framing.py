@@ -30,5 +30,5 @@ def parse_content_length(headers: list[tuple[bytes, bytes]], max_bytes: int) -> 
         raise JSONBoundaryError(400, "invalid_content_length", "Request framing is invalid.")
     declared = int(value)
     if declared > max_bytes:
-        raise JSONBoundaryError(413, "body_too_large", "Request body exceeds the 1 MiB limit.")
+        raise JSONBoundaryError(413, "body_too_large", "Request body exceeds the 4 MiB limit.")
     return declared

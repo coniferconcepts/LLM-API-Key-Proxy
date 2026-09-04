@@ -13,7 +13,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from proxy_app.request_framing import JSONBoundaryError, parse_content_length
 from proxy_app.safe_errors import anthropic_error_content
 
-MAX_JSON_BODY_BYTES = 1_048_576
+MAX_JSON_BODY_BYTES = 4_194_304
 MAX_JSON_DEPTH = 64
 MAX_JSON_NODES = 100_000
 MAX_JSON_NUMBER_CHARACTERS = 128
@@ -215,7 +215,7 @@ class BoundedJSONBodyMiddleware:
                     raise JSONBoundaryError(
                         413,
                         "body_too_large",
-                        "Request body exceeds the 1 MiB limit.",
+                        "Request body exceeds the 4 MiB limit.",
                     )
                 chunks.append(chunk)
                 if not message.get("more_body", False):

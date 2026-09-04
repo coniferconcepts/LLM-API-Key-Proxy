@@ -69,7 +69,7 @@ def test_all_json_post_routes_enforce_limit_before_dispatch(monkeypatch, tmp_pat
         dispatches += 1
         raise RuntimeError("boundary passed")
 
-    oversized = _json_body_at_size(1_048_577)
+    oversized = _json_body_at_size(4_194_305)
     paths = (
         "/v1/chat/completions",
         "/v1/messages",
@@ -89,7 +89,7 @@ def test_all_json_post_routes_enforce_limit_before_dispatch(monkeypatch, tmp_pat
         exact = client.post(
             "/v1/chat/completions",
             headers={"Authorization": "Bearer proxy-token", "Host": "127.0.0.1"},
-            content=_json_body_at_size(1_048_576),
+            content=_json_body_at_size(4_194_304),
         )
 
     assert exact.status_code == 500
