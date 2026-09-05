@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, ClassVar
 
 from starlette.testclient import TestClient
-
 from test_local_transport_safe_mode import _block_catalog_fetches, _import_proxy_main
 
 SECRET_MARKER = "SECRET-MARKER-provider-payload-" + ("x" * 300)
@@ -22,7 +21,7 @@ def test_safe_exception_logger_omits_exception_text(caplog) -> None:
 
 
 class RecordingRawLogger:
-    final_responses: list[dict[str, Any]] = []
+    final_responses: ClassVar[list[dict[str, Any]]] = []
 
     def log_request(self, **_kwargs: Any) -> None:
         return
