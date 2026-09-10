@@ -8,9 +8,14 @@ from typing import Any, Dict, Optional
 
 # ChatGPT/Codex-backed OpenAI-compatible sidecars (e.g. codex-lb on OPENAI_API_BASE)
 # reject several OpenAI Platform fields that AI SDK / OpenCode still emit.
+# GPT-5/GPT-6 reasoning models also reject sampling and logprob fields.
 _CODEX_LB_UNSUPPORTED_CHAT_PARAMS = frozenset(
     {
         "user",
+        "temperature",
+        "top_p",
+        "top_logprobs",
+        "logprobs",
     }
 )
 _CODEX_LB_UNSUPPORTED_SERVICE_TIERS = frozenset({"auto", "default"})
@@ -126,6 +131,12 @@ def _strip_codex_lb_incompatible_chat_params(
         and service_tier.strip().lower() in _CODEX_LB_UNSUPPORTED_SERVICE_TIERS
     ):
         payload.pop("service_tier", None)
+
+    # Reasoning models reject max_tokens; keep max_completion_tokens if already set.
+    if "max_tokens" in payload:
+        if "max_completion_tokens" not in payload:
+            payload["max_completion_tokens"] = payload["max_tokens"]
+        payload.pop("max_tokens", None)
 
     return payload
 

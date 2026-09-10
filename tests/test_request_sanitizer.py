@@ -172,6 +172,68 @@ def test_sanitize_keeps_user_for_openai_without_local_api_base(monkeypatch):
     assert sanitized["user"] == "platform-user"
 
 
+def test_sanitize_strips_sampling_and_translates_max_tokens_for_openai_family(
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:2455/v1")
+    cases = (
+        "openai/gpt-6-astra",
+        "gpt-6-astra",
+        "gpt-6",
+        "openai/gpt-5.6-sol",
+    )
+    for model in cases:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_logprobs": 5,
+            "logprobs": True,
+            "max_tokens": 128,
+        }
+        sanitized = sanitize_request_payload(payload, model)
+        assert "temperature" not in sanitized, model
+        assert "top_p" not in sanitized, model
+        assert "top_logprobs" not in sanitized, model
+        assert "logprobs" not in sanitized, model
+        assert "max_tokens" not in sanitized, model
+        assert sanitized["max_completion_tokens"] == 128, model
+
+
+def test_sanitize_keeps_existing_max_completion_tokens_when_translating(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:2455/v1")
+    payload = {
+        "model": "openai/gpt-6-astra",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 64,
+        "max_completion_tokens": 256,
+    }
+
+    sanitized = sanitize_request_payload(payload, payload["model"])
+
+    assert "max_tokens" not in sanitized
+    assert sanitized["max_completion_tokens"] == 256
+
+
+def test_sanitize_keeps_sampling_for_non_openai_with_local_api_base(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:2455/v1")
+    payload = {
+        "model": "ollama_cloud/glm-5.3-flash:cloud",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.2,
+        "top_p": 0.8,
+        "max_tokens": 32,
+    }
+
+    sanitized = sanitize_request_payload(payload, payload["model"])
+
+    assert sanitized["temperature"] == 0.2
+    assert sanitized["top_p"] == 0.8
+    assert sanitized["max_tokens"] == 32
+    assert "max_completion_tokens" not in sanitized
+
+
 def test_sanitize_keeps_user_for_non_openai_with_local_api_base(monkeypatch):
     monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:2455/v1")
     payload = {
