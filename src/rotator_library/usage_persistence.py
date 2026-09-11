@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 import hashlib
-from typing import TypeAlias, TypedDict
+from typing import Any, TypeAlias, TypedDict
 
 from typing_extensions import assert_never
 
@@ -89,3 +89,22 @@ def safe_usage_data_for_persistence(
         else:
             safe[_credential_fingerprint(credential)] = credential_data
     return safe
+
+
+_ENV_IDENTIFIER_PREFIX = "env://"
+
+
+def project_quota_stats_credentials(stats: dict[str, Any]) -> dict[str, Any]:
+    """Redact credential material from public quota-stats entries (in place).
+
+    Drops ``full_path`` and replaces raw-key identifiers with the persisted
+    ``credential_sha256:<16-hex>`` fingerprint. ``env://`` identifiers are kept.
+    Call only at the public endpoint boundary, after provider enrichment.
+    """
+    for prov_stats in stats.get("providers", {}).values():
+        for cred in prov_stats.get("credentials", []):
+            raw = cred.pop("full_path", None)
+            ident = cred.get("identifier")
+            if isinstance(ident, str) and not ident.startswith(_ENV_IDENTIFIER_PREFIX):
+                cred["identifier"] = _credential_fingerprint(raw or ident)
+    return stats

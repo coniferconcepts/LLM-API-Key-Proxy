@@ -17,7 +17,7 @@ from .providers import PROVIDER_PLUGINS
 from .utils.resilient_io import ResilientStateWriter
 from .utils.paths import get_data_file
 from .usage_persistence import (
-    _credential_fingerprint as _credential_fingerprint,
+    project_quota_stats_credentials as project_quota_stats_credentials,
     add_readable_timestamps,
     safe_usage_data_for_persistence,
 )
@@ -283,7 +283,7 @@ class UsageManager:
         model: str,
     ) -> Optional[Dict[str, Any]]:
         clean_model = model.split("/")[-1] if "/" in model else model
-        return resolve_custom_cap_config(
+        return resolve_custom_cap_config(  # type: ignore[no-any-return]
             self.custom_caps.get(provider),
             tier_priority=tier_priority,
             clean_model=clean_model,
@@ -291,7 +291,7 @@ class UsageManager:
         )
 
     def _get_model_quota_group_by_provider(self, provider: str, model: str) -> Optional[str]:
-        return model_quota_group_for_provider(self._get_provider_instance(provider), model)
+        return model_quota_group_for_provider(self._get_provider_instance(provider), model)  # type: ignore[no-any-return]
 
     def _resolve_custom_cap_max(
         self,
@@ -300,7 +300,7 @@ class UsageManager:
         cap_config: Dict[str, Any],
         actual_max: Optional[int],
     ) -> Optional[int]:
-        return resolve_custom_cap_max(provider, model, cap_config, actual_max)
+        return resolve_custom_cap_max(provider, model, cap_config, actual_max)  # type: ignore[no-any-return]
 
     def _calculate_custom_cooldown_until(
         self,

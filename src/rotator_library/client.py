@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, AsyncGenerator, Optional, TYPE_CHECKING, Union, Tuple
 
-from .usage_manager import UsageManager
+from .usage_manager import UsageManager, project_quota_stats_credentials
 from .failure_logger import log_failure, configure_failure_logger
 from .error_handler import (
     PreRequestCallbackError,
@@ -3292,7 +3292,7 @@ class RotatingClient:
                         if tier:
                             cred["tier"] = tier
 
-        return stats
+        return project_quota_stats_credentials(stats)
 
     def _find_model_stats_in_data(
         self,
