@@ -19,6 +19,48 @@ from rotator_library.secure_logging import OwnerOnlyFileHandler  # noqa: E402
 from rotator_library.utils.paths import get_logs_dir  # noqa: E402
 
 SECRET = "synthetic-secret-never-persist"
+ALLOWLISTED_FAILURE_LOG_KEYS = {
+    "schema_version",
+    "timestamp",
+    "attempt_number",
+    "error_type",
+    "status_code",
+    "request_id",
+    "alias",
+}
+
+
+def _write_failure_and_read(
+    tmp_path: Path,
+    *,
+    headers: dict,
+    error: Exception | None = None,
+) -> dict:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(mode=0o755)
+    failure_logger.configure_failure_logger(logs_dir)
+    try:
+        failure_logger.log_failure(
+            api_key=f"{SECRET}-key",
+            model=f"{SECRET}-model",
+            attempt=1,
+            error=error or RuntimeError(f"{SECRET}-exception"),
+            request_headers=headers,
+            raw_response_text=f"{SECRET}-response-body",
+        )
+    finally:
+        for handler in failure_logger.get_failure_logger().handlers:
+            handler.close()
+        failure_logger.configure_failure_logger(None)
+
+    log_path = logs_dir / "failures.log"
+    persisted = log_path.read_text(encoding="utf-8")
+    records = [json.loads(line) for line in persisted.splitlines() if line]
+    assert SECRET not in persisted
+    assert records
+    record = records[-1]
+    assert set(record) <= ALLOWLISTED_FAILURE_LOG_KEYS
+    return record
 
 
 def _mode(path: Path) -> int:
@@ -62,12 +104,77 @@ def test_failure_log_persists_only_allowlisted_projection(
     assert records
     assert all(
         set(record)
-        <= {"schema_version", "timestamp", "attempt_number", "error_type", "status_code"}
+        <= {
+            "schema_version",
+            "timestamp",
+            "attempt_number",
+            "error_type",
+            "status_code",
+            "request_id",
+            "alias",
+        }
         for record in records
     )
     if os.name == "posix":
         assert _mode(logs_dir) == 0o700
         assert all(_mode(path) == 0o600 for path in log_files)
+
+
+def test_failure_log_v3_persists_validated_request_id_and_alias(
+    tmp_path: Path,
+) -> None:
+    record = _write_failure_and_read(
+        tmp_path,
+        headers={
+            "X-Request-Id": "req_AbC.123-xyz",
+            "X-OpenCode-Alias": "glm-5.3-flash",
+        },
+    )
+    assert record["schema_version"] == "failure_log.v3"
+    assert record["request_id"] == "req_AbC.123-xyz"
+    assert record["alias"] == "glm-5.3-flash"
+
+
+@pytest.mark.parametrize(
+    "headers,expected_request_id,expected_alias",
+    (
+        ({"x-request-id": "has space", "x-opencode-alias": "glm-5"}, None, "glm-5"),
+        ({"x-request-id": "a" * 65, "x-opencode-alias": "glm-5"}, None, "glm-5"),
+        ({"x-request-id": "req-1", "x-opencode-alias": "GLM-5"}, "req-1", None),
+        ({"x-request-id": "req-1", "x-opencode-alias": "-glm"}, "req-1", None),
+        ({"x-request-id": "req-1", "x-opencode-alias": "a" * 65}, "req-1", None),
+        ({"x-request-id": "", "x-opencode-alias": ""}, None, None),
+    ),
+)
+def test_failure_log_v3_invalid_attribution_persists_none(
+    tmp_path: Path,
+    headers: dict,
+    expected_request_id: str | None,
+    expected_alias: str | None,
+) -> None:
+    record = _write_failure_and_read(tmp_path, headers=headers)
+    assert record["schema_version"] == "failure_log.v3"
+    assert record["request_id"] == expected_request_id
+    assert record["alias"] == expected_alias
+
+
+def test_failure_log_v3_secret_in_other_headers_never_reaches_file(
+    tmp_path: Path,
+) -> None:
+    record = _write_failure_and_read(
+        tmp_path,
+        headers={
+            "Authorization": f"Bearer {SECRET}",
+            "Cookie": SECRET,
+            "x-api-key": SECRET,
+            "x-request-id": "req-ok",
+            "x-opencode-alias": "glm-5",
+        },
+    )
+    assert record["schema_version"] == "failure_log.v3"
+    assert record["request_id"] == "req-ok"
+    assert record["alias"] == "glm-5"
+    assert set(record) <= ALLOWLISTED_FAILURE_LOG_KEYS
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX mode contract")

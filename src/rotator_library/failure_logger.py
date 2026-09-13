@@ -23,6 +23,8 @@ FAILURE_LOG_MAX_SIZE: int = 5 * 1024 * 1024
 FAILURE_LOG_BACKUP_COUNT: int = 2
 
 SAFE_ERROR_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+SAFE_ALIAS = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
 class JsonFormatter(logging.Formatter):
@@ -127,6 +129,30 @@ def _safe_status_code(error: Exception) -> int | None:
     return None
 
 
+def _header_ci(request_headers: dict, name: str) -> str | None:
+    if not isinstance(request_headers, dict):
+        return None
+    target = name.lower()
+    for key, value in request_headers.items():
+        if isinstance(key, str) and key.lower() == target:
+            return value if isinstance(value, str) else None
+    return None
+
+
+def _validated_request_id(request_headers: dict) -> str | None:
+    value = _header_ci(request_headers, "x-request-id")
+    if value is None or not SAFE_REQUEST_ID.fullmatch(value):
+        return None
+    return value
+
+
+def _validated_alias(request_headers: dict) -> str | None:
+    value = _header_ci(request_headers, "x-opencode-alias")
+    if value is None or not SAFE_ALIAS.fullmatch(value):
+        return None
+    return value
+
+
 def log_failure(
     api_key: str,
     model: str,
@@ -146,15 +172,18 @@ def log_failure(
         model: Ignored compatibility input; never persisted
         attempt: The attempt number (1-based)
         error: Used only to derive an allowlisted type name and status code
-        request_headers: Ignored compatibility input; never persisted
+        request_headers: Used only for validated ``request_id`` (``x-request-id``)
+            and ``alias`` (``x-opencode-alias``). Other headers are ignored.
         raw_response_text: Ignored compatibility input; never persisted
     """
     detailed_log_data = {
-        "schema_version": "failure_log.v2",
+        "schema_version": "failure_log.v3",
         "timestamp": datetime.utcnow().isoformat(),
         "attempt_number": attempt,
         "error_type": _safe_error_type(error),
         "status_code": _safe_status_code(error),
+        "request_id": _validated_request_id(request_headers),
+        "alias": _validated_alias(request_headers),
     }
 
     summary_message = f"API call failed. Error type: {_safe_error_type(error)}."
