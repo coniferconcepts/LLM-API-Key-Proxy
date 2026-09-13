@@ -58,6 +58,33 @@ def test_sanitize_request_payload_preserves_existing_reasoning_content():
     assert sanitized["messages"][0]["reasoning_content"] == "plan"
 
 
+def test_sanitize_strips_model_id_from_fireworks_messages():
+    payload = {
+        "model": "fireworks/accounts/fireworks/models/glm-5p3-flash",
+        "messages": [
+            {"role": "assistant", "content": "ok", "model_id": "glm-5.3-flash"},
+            {"role": "user", "content": "next"},
+        ],
+    }
+
+    sanitized = sanitize_request_payload(payload, payload["model"])
+
+    assert "model_id" not in sanitized["messages"][0]
+    assert sanitized["messages"][0]["content"] == "ok"
+    assert sanitized["messages"][1] == {"role": "user", "content": "next"}
+
+
+def test_sanitize_keeps_model_id_on_ollama_cloud_messages():
+    payload = {
+        "model": "ollama_cloud/glm-5.3-flash:cloud",
+        "messages": [{"role": "assistant", "content": "ok", "model_id": "glm-5.3-flash"}],
+    }
+
+    sanitized = sanitize_request_payload(payload, payload["model"])
+
+    assert sanitized["messages"][0]["model_id"] == "glm-5.3-flash"
+
+
 def test_sanitize_request_payload_does_not_mutate_other_models():
     payload = {
         "model": "ollama_cloud/kimi-k2.6",

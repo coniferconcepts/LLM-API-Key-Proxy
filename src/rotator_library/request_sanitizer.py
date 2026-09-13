@@ -19,6 +19,20 @@ _CODEX_LB_UNSUPPORTED_CHAT_PARAMS = frozenset(
     }
 )
 _CODEX_LB_UNSUPPORTED_SERVICE_TIERS = frozenset({"auto", "default"})
+# Fireworks (and GO) OpenAI-compat chat rejects Grok/OpenCode extras such as
+# messages[].model_id. Cloud/Ollama tolerate them; Fireworks returns 400.
+_OPENAI_COMPAT_MESSAGE_KEYS = frozenset(
+    {
+        "role",
+        "content",
+        "name",
+        "tool_calls",
+        "tool_call_id",
+        "function_call",
+        "refusal",
+        "reasoning_content",
+    }
+)
 
 
 def _requires_reasoning_content_placeholder(message: Dict[str, Any]) -> bool:
@@ -157,5 +171,25 @@ def sanitize_request_payload(payload: Dict[str, Any], model: str) -> Dict[str, A
         payload = _disable_thinking_for_opencode_go_tooling(payload)
 
     payload = _strip_codex_lb_incompatible_chat_params(payload, model)
+    payload = _strip_openai_compat_extra_message_fields(payload, model)
 
+    return payload
+
+
+def _strip_openai_compat_extra_message_fields(
+    payload: Dict[str, Any], model: str
+) -> Dict[str, Any]:
+    if not isinstance(model, str):
+        return payload
+    if not (model.startswith("fireworks/") or model.startswith("opencode_go/")):
+        return payload
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return payload
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        extra = [key for key in message if key not in _OPENAI_COMPAT_MESSAGE_KEYS]
+        for key in extra:
+            del message[key]
     return payload
