@@ -22,6 +22,7 @@ from .failure_logger import log_failure, configure_failure_logger
 from .error_handler import (
     PreRequestCallbackError,
     CredentialNeedsReauthError,
+    UpstreamStreamUnavailableError,
     classify_error,
     NoAvailableKeysError,
     should_rotate_on_error,
@@ -1030,13 +1031,20 @@ class RotatingClient:
         """
         last_usage = None
         stream_completed = False
-        stream_iterator = stream.__aiter__()
         json_buffer = ""
         accumulated_finish_reason = None  # Track strongest finish_reason across chunks
         has_tool_calls = False  # Track if ANY tool calls were seen in stream
         stream_normalizer = OpenAIStreamNormalizer()
 
         try:
+            # Guard before any chunk is yielded so a None/non-iterable upstream
+            # stream becomes StreamedAPIError (retryable) instead of AttributeError.
+            if stream is None or not callable(getattr(stream, "__aiter__", None)):
+                raise StreamedAPIError(
+                    "upstream_stream_unavailable",
+                    data=UpstreamStreamUnavailableError(),
+                )
+            stream_iterator = stream.__aiter__()
             while True:
                 if request and await request.is_disconnected():
                     lib_logger.info("Client disconnected. Aborting upstream stream.")
@@ -2355,6 +2363,7 @@ class RotatingClient:
 
                             except (
                                 StreamedAPIError,
+                                UpstreamStreamUnavailableError,
                                 litellm.RateLimitError,
                                 httpx.HTTPStatusError,
                             ) as e:
@@ -2473,7 +2482,7 @@ class RotatingClient:
                                 )
 
                                 # Keep a short sanitized reason for invalid_request diagnosis
-                                # (failure_log.v2 no longer stores full error_message).
+                                # (failure_log.v3 no longer stores full error_message).
                                 safe_detail = (error_message or "")[:240]
                                 lib_logger.warning(
                                     "Streaming credential attempt failed category=%s status=%s detail=%s",
@@ -2614,6 +2623,7 @@ class RotatingClient:
 
                         except (
                             StreamedAPIError,
+                            UpstreamStreamUnavailableError,
                             litellm.RateLimitError,
                             httpx.HTTPStatusError,
                         ) as e:

@@ -197,6 +197,19 @@ class CredentialNeedsReauthError(Exception):
         super().__init__(self.message)
 
 
+class UpstreamStreamUnavailableError(Exception):
+    """Provider returned no usable async stream (None or missing ``__aiter__``).
+
+    Rotatable provider failure. ``status_code`` is 502. The message is a
+    category token only — never include credentials or the full model string.
+    """
+
+    status_code = 502
+
+    def __init__(self, message: str = "upstream_stream_unavailable"):
+        super().__init__(message)
+
+
 class EmptyResponseError(Exception):
     """
     Raised when a provider returns an empty response after multiple retry attempts.
@@ -801,6 +814,13 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             error_type="credential_reauth_needed",
             original_exception=e,
             status_code=401,  # Treat as auth error for reporting purposes
+        )
+
+    if isinstance(e, UpstreamStreamUnavailableError):
+        return ClassifiedError(
+            error_type="server_error",
+            original_exception=e,
+            status_code=getattr(e, "status_code", None) or 502,
         )
 
     if isinstance(e, EmptyResponseError):

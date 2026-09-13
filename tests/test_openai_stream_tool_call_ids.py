@@ -15,6 +15,18 @@ from openai_stream_tool_call_wrapper_lifecycle_cases import (
 from openai_stream_tool_call_wrapper_lifecycle_cases import (
     test_safe_streaming_wrapper_releases_key_after_consumer_cancellation,
 )
+from openai_stream_tool_call_wrapper_none_stream_cases import (
+    test_safe_streaming_wrapper_none_stream_raises_typed_error,
+)
+from openai_stream_tool_call_wrapper_none_stream_cases import (
+    test_safe_streaming_wrapper_non_iterable_raises_typed_error,
+)
+from openai_stream_tool_call_wrapper_none_stream_cases import (
+    test_safe_streaming_wrapper_async_iterator_streams_chunks_unchanged,
+)
+from openai_stream_tool_call_wrapper_none_stream_cases import (
+    test_upstream_stream_unavailable_is_rotatable_server_error,
+)
 from openai_stream_tool_call_normalizer_basic_cases import (
     test_normalizer_reuses_synthetic_id_for_continuation_delta,
 )

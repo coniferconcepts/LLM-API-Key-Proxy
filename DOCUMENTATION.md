@@ -420,6 +420,7 @@ class ErrorType(Enum):
 2. **Special Exception Types**:
    - `EmptyResponseError` → `SERVER_ERROR` (status 503, rotatable)
    - `TransientQuotaError` → `SERVER_ERROR` (status 503, rotatable - bare 429 without retry info)
+   - `UpstreamStreamUnavailableError` → `SERVER_ERROR` (status 502, rotatable - provider returned None/non-iterable stream)
 
 3. **Message Analysis**: Fallback for ambiguous errors
    - Searches for keywords like "quota exceeded", "rate limit", "invalid api key"
