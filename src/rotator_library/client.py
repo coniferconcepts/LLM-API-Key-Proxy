@@ -47,6 +47,11 @@ from .background_refresher import BackgroundRefresher
 from .model_definitions import ModelDefinitions
 from . import fireworks_admission as _fa
 from .openrouter_headers import merge_provider_extra_headers
+from .client_stream_guard import (
+    StreamedAPIError as StreamedAPIError,
+    _safe_request_headers as _safe_request_headers,
+    require_async_stream_iterator,
+)
 from .routing_policy import RouteDecision, RoutingPolicy, RoutingPolicyError
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir
@@ -71,25 +76,6 @@ lib_logger = logging.getLogger("rotator_library")
 
 
 lib_logger.propagate = False
-
-
-def _safe_request_headers(request: Any) -> Dict[str, str]:
-    if request is None:
-        return {}
-    blocked = {
-        "x-opencode-bounded-capability",
-        "x-opencode-internal-bounded-capability",
-        "x-opencode-internal-bounded-entry",
-    }
-    return {name: value for name, value in request.headers.items() if name.lower() not in blocked}
-
-
-class StreamedAPIError(Exception):
-    """Custom exception to signal an API error received over a stream."""
-
-    def __init__(self, message, data=None):
-        super().__init__(message)
-        self.data = data
 
 
 class RotatingClient:
@@ -1039,12 +1025,7 @@ class RotatingClient:
         try:
             # Guard before any chunk is yielded so a None/non-iterable upstream
             # stream becomes StreamedAPIError (retryable) instead of AttributeError.
-            if stream is None or not callable(getattr(stream, "__aiter__", None)):
-                raise StreamedAPIError(
-                    "upstream_stream_unavailable",
-                    data=UpstreamStreamUnavailableError(),
-                )
-            stream_iterator = stream.__aiter__()
+            stream_iterator = require_async_stream_iterator(stream)
             while True:
                 if request and await request.is_disconnected():
                     lib_logger.info("Client disconnected. Aborting upstream stream.")
