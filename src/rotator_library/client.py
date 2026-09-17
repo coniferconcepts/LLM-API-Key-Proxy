@@ -38,7 +38,6 @@ from .openai_stream_normalize import OpenAIStreamNormalizer
 from .request_sanitizer import sanitize_request_payload
 from .cooldown_manager import (
     CooldownManager,
-    _agent_debug_log,
     has_untried_peer_credentials,
     raise_if_cooldown_exceeds_budget,
     remaining_budget_seconds,
@@ -747,17 +746,6 @@ class RotatingClient:
             return kwargs
         attached = dict(kwargs)
         attached["shared_session"] = session
-        # region agent log
-        _agent_debug_log(
-            "A",
-            "client.py:_attach_shared_session",
-            "attached litellm shared_session",
-            {
-                "session_id": id(session),
-                "closed": bool(getattr(session, "closed", False)),
-            },
-        )
-        # endregion
         return attached
 
     def _apply_default_safety_settings(self, litellm_kwargs: Dict[str, Any], provider: str):
@@ -1327,7 +1315,7 @@ class RotatingClient:
 
         await self.cooldown_manager.start_cooldown(provider, cooldown_duration)
         lib_logger.warning(
-            "Rate limit on provider %s with no untried peers — " "provider cooldown %ss",
+            "Rate limit on provider %s with no untried peers — provider cooldown %ss",
             provider,
             cooldown_duration,
         )

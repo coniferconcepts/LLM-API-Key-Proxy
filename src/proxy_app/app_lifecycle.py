@@ -17,7 +17,6 @@ from proxy_app.oauth_bootstrap import (
     SafeExceptionLogger,
     initialize_oauth_credentials,
 )
-from rotator_library.cooldown_manager import _agent_debug_log
 
 
 class BackgroundRefresher(Protocol):
@@ -211,18 +210,6 @@ async def application_lifespan(
             trust_env = bool(getattr(client, "trust_env", True))
             aiohttp_session = aiohttp.ClientSession(trust_env=trust_env)
             client.litellm_shared_session = aiohttp_session
-            # region agent log
-            _agent_debug_log(
-                "B",
-                "app_lifecycle.py:application_lifespan",
-                "owned aiohttp session; aclient_session unchanged",
-                {
-                    "aclient_session_is_httpx": type(dependencies.litellm.aclient_session).__name__,
-                    "shared_session_id": id(aiohttp_session),
-                    "trust_env": trust_env,
-                },
-            )
-            # endregion
         else:
             previous_session = dependencies.litellm.aclient_session
             owned_session = client.http_client
@@ -264,28 +251,6 @@ async def application_lifespan(
                     if client is not None:
                         client.litellm_shared_session = None
                     await _drop_litellm_async_httpx_cache(dependencies.litellm)
-                    # region agent log
-                    _agent_debug_log(
-                        "E",
-                        "app_lifecycle.py:application_lifespan",
-                        "closed owned aiohttp session and dropped LiteLLM cache",
-                        {
-                            "session_closed": bool(getattr(aiohttp_session, "closed", True)),
-                            "cache_size": len(
-                                getattr(
-                                    getattr(
-                                        dependencies.litellm,
-                                        "in_memory_llm_clients_cache",
-                                        None,
-                                    ),
-                                    "cache_dict",
-                                    {},
-                                )
-                                or {}
-                            ),
-                        },
-                    )
-                    # endregion
 
                 await _run_cleanup(
                     _close_owned_aiohttp,

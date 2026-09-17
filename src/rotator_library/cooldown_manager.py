@@ -2,10 +2,9 @@
 # Copyright (c) 2026 Mirrowel
 
 import asyncio
-import json
 import logging
 import time
-from typing import Collection, Dict, Iterable, Optional, Mapping, Any
+from typing import Collection, Dict, Iterable, Optional
 
 
 def has_untried_peer_credentials(
@@ -49,49 +48,10 @@ COOLDOWN_BUDGET_EXCEEDED_MESSAGE = (
 )
 
 
-def _agent_debug_log(
-    hypothesis_id: str, location: str, message: str, data: Mapping[str, Any]
-) -> None:
-    # region agent log
-    try:
-        with open(
-            "/Users/benjaminerb/CODE/opencode-router/.cursor/debug-40d4a2.log",
-            "a",
-            encoding="utf-8",
-        ) as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "sessionId": "40d4a2",
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": dict(data),
-                        "timestamp": int(time.time() * 1000),
-                        "runId": "impl",
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n"
-            )
-    except OSError:
-        pass
-    # endregion
-
-
 def remaining_budget_seconds(deadline: float, *, now: Optional[float] = None) -> float:
     """Return non-negative seconds left before ``deadline``."""
     current = time.time() if now is None else now
-    raw = deadline - current
-    clamped = max(0.0, raw)
-    if raw < 0:
-        _agent_debug_log(
-            "C",
-            "cooldown_manager.py:remaining_budget_seconds",
-            "clamped negative remaining budget",
-            {"raw": raw, "clamped": clamped},
-        )
-    return clamped
+    return max(0.0, deadline - current)
 
 
 def raise_if_cooldown_exceeds_budget(remaining_cooldown: float, remaining_budget: float) -> None:
