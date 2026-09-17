@@ -13,6 +13,7 @@ import aiofiles
 import litellm
 
 from .error_handler import ClassifiedError, NoAvailableKeysError, mask_credential
+from .cooldown_manager import _agent_debug_log, remaining_budget_seconds
 from .providers import PROVIDER_PLUGINS
 from .utils.resilient_io import ResilientStateWriter
 from .utils.paths import get_data_file
@@ -2135,15 +2136,26 @@ class UsageManager:
                         await asyncio.sleep(1)
                         continue
 
-                    remaining_budget = acquisition_deadline - time.time()
+                    remaining_budget = remaining_budget_seconds(acquisition_deadline)
                     wait_needed = soonest_end - time.time()
 
-                    if wait_needed > remaining_budget:
+                    if remaining_budget <= 0 or wait_needed > remaining_budget:
                         # Fail fast - no credential will be available in time
                         lib_logger.warning(
                             f"All credentials on cooldown. Soonest available in {wait_needed:.1f}s, "
                             f"but only {remaining_budget:.1f}s budget remaining. Failing fast."
                         )
+                        # region agent log
+                        _agent_debug_log(
+                            "D",
+                            "usage_manager.py:acquire_key",
+                            "cooldown wait exceeds clamped budget",
+                            {
+                                "remaining_budget": remaining_budget,
+                                "wait_needed": wait_needed,
+                            },
+                        )
+                        # endregion
                         recorded_soonest_end = soonest_end
                         break  # Exit loop, will raise NoAvailableKeysError
 
@@ -2341,15 +2353,26 @@ class UsageManager:
                         await asyncio.sleep(1)
                         continue
 
-                    remaining_budget = acquisition_deadline - time.time()
+                    remaining_budget = remaining_budget_seconds(acquisition_deadline)
                     wait_needed = soonest_end - time.time()
 
-                    if wait_needed > remaining_budget:
+                    if remaining_budget <= 0 or wait_needed > remaining_budget:
                         # Fail fast - no credential will be available in time
                         lib_logger.warning(
                             f"All credentials on cooldown. Soonest available in {wait_needed:.1f}s, "
                             f"but only {remaining_budget:.1f}s budget remaining. Failing fast."
                         )
+                        # region agent log
+                        _agent_debug_log(
+                            "D",
+                            "usage_manager.py:acquire_key",
+                            "cooldown wait exceeds clamped budget",
+                            {
+                                "remaining_budget": remaining_budget,
+                                "wait_needed": wait_needed,
+                            },
+                        )
+                        # endregion
                         recorded_soonest_end = soonest_end
                         break  # Exit loop, will raise NoAvailableKeysError
 
@@ -2379,8 +2402,16 @@ class UsageManager:
             try:
                 try:
                     async with wait_condition:
-                        remaining_budget = acquisition_deadline - time.time()
+                        remaining_budget = remaining_budget_seconds(acquisition_deadline)
                         if remaining_budget <= 0:
+                            # region agent log
+                            _agent_debug_log(
+                                "D",
+                                "usage_manager.py:wait_condition",
+                                "clamped budget is zero; skip wait",
+                                {"remaining_budget": remaining_budget},
+                            )
+                            # endregion
                             break  # Exit if the budget has already been exceeded.
                         # Wait for a notification, but no longer than the remaining budget or 1 second.
                         await asyncio.wait_for(

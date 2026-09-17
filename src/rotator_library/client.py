@@ -38,8 +38,10 @@ from .openai_stream_normalize import OpenAIStreamNormalizer
 from .request_sanitizer import sanitize_request_payload
 from .cooldown_manager import (
     CooldownManager,
+    _agent_debug_log,
     has_untried_peer_credentials,
     raise_if_cooldown_exceeds_budget,
+    remaining_budget_seconds,
     should_apply_provider_cooldown_for_rate_limit_error,
 )
 from .credential_manager import CredentialManager
@@ -509,6 +511,8 @@ class RotatingClient:
         )
         self._model_list_cache = {}
         self.http_client = httpx.AsyncClient(trust_env=trust_env, follow_redirects=False)
+        self.litellm_shared_session = None
+        self.trust_env = trust_env
         self.provider_config = ProviderConfig()
         self.cooldown_manager = CooldownManager()
         self.litellm_provider_params = litellm_provider_params or {}
@@ -736,6 +740,25 @@ class RotatingClient:
         """Close the HTTP client to prevent resource leaks."""
         if hasattr(self, "http_client") and self.http_client:
             await self.http_client.aclose()
+
+    def _attach_shared_session(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        session = getattr(self, "litellm_shared_session", None)
+        if session is None:
+            return kwargs
+        attached = dict(kwargs)
+        attached["shared_session"] = session
+        # region agent log
+        _agent_debug_log(
+            "A",
+            "client.py:_attach_shared_session",
+            "attached litellm shared_session",
+            {
+                "session_id": id(session),
+                "closed": bool(getattr(session, "closed", False)),
+            },
+        )
+        # endregion
+        return attached
 
     def _apply_default_safety_settings(self, litellm_kwargs: Dict[str, Any], provider: str):
         """
@@ -1471,7 +1494,7 @@ class RotatingClient:
                     remaining_cooldown = await self.cooldown_manager.get_cooldown_remaining(
                         provider
                     )
-                    remaining_budget = deadline - time.time()
+                    remaining_budget = remaining_budget_seconds(deadline)
                     raise_if_cooldown_exceeds_budget(remaining_cooldown, remaining_budget)
 
                     lib_logger.warning(
@@ -1670,8 +1693,8 @@ class RotatingClient:
                             wait_time = classified_error.retry_after or (
                                 2**attempt
                             ) + random.uniform(0, 1)
-                            remaining_budget = deadline - time.time()
-                            if wait_time > remaining_budget:
+                            remaining_budget = remaining_budget_seconds(deadline)
+                            if remaining_budget <= 0 or wait_time > remaining_budget:
                                 error_accumulator.record_error(
                                     current_cred, classified_error, error_message
                                 )
@@ -1808,6 +1831,7 @@ class RotatingClient:
                             final_kwargs = self.provider_config.convert_for_litellm(
                                 **litellm_kwargs
                             )
+                            final_kwargs = self._attach_shared_session(final_kwargs)
 
                             response = await api_call(
                                 **final_kwargs,
@@ -1904,10 +1928,10 @@ class RotatingClient:
                             wait_time = classified_error.retry_after or (
                                 2**attempt
                             ) + random.uniform(0, 1)
-                            remaining_budget = deadline - time.time()
+                            remaining_budget = remaining_budget_seconds(deadline)
 
                             # If the required wait time exceeds the budget, don't wait; rotate to the next key immediately.
-                            if wait_time > remaining_budget:
+                            if remaining_budget <= 0 or wait_time > remaining_budget:
                                 error_accumulator.record_error(
                                     current_cred, classified_error, error_message
                                 )
@@ -1968,8 +1992,8 @@ class RotatingClient:
                                 wait_time = classified_error.retry_after or (
                                     2**attempt
                                 ) + random.uniform(0, 1)
-                                remaining_budget = deadline - time.time()
-                                if wait_time <= remaining_budget:
+                                remaining_budget = remaining_budget_seconds(deadline)
+                                if remaining_budget > 0 and wait_time <= remaining_budget:
                                     lib_logger.warning(
                                         f"Server error, retrying same key in {wait_time:.2f}s."
                                     )
@@ -2211,7 +2235,7 @@ class RotatingClient:
                         remaining_cooldown = await self.cooldown_manager.get_cooldown_remaining(
                             provider
                         )
-                        remaining_budget = deadline - time.time()
+                        remaining_budget = remaining_budget_seconds(deadline)
                         raise_if_cooldown_exceeds_budget(remaining_cooldown, remaining_budget)
                         lib_logger.warning(
                             f"Provider {provider} is in a global cooldown. All requests to this provider will be paused for {remaining_cooldown:.2f} seconds."
@@ -2429,8 +2453,8 @@ class RotatingClient:
                                 wait_time = classified_error.retry_after or (
                                     2**attempt
                                 ) + random.uniform(0, 1)
-                                remaining_budget = deadline - time.time()
-                                if wait_time > remaining_budget:
+                                remaining_budget = remaining_budget_seconds(deadline)
+                                if remaining_budget <= 0 or wait_time > remaining_budget:
                                     error_accumulator.record_error(
                                         current_cred, classified_error, error_message
                                     )
@@ -2576,6 +2600,7 @@ class RotatingClient:
                             final_kwargs = self.provider_config.convert_for_litellm(
                                 **litellm_kwargs
                             )
+                            final_kwargs = self._attach_shared_session(final_kwargs)
 
                             response = await litellm.acompletion(
                                 **final_kwargs,
@@ -2743,8 +2768,8 @@ class RotatingClient:
                             wait_time = classified_error.retry_after or (
                                 2**attempt
                             ) + random.uniform(0, 1)
-                            remaining_budget = deadline - time.time()
-                            if wait_time > remaining_budget:
+                            remaining_budget = remaining_budget_seconds(deadline)
+                            if remaining_budget <= 0 or wait_time > remaining_budget:
                                 lib_logger.warning(
                                     f"Required retry wait time ({wait_time:.2f}s) exceeds remaining budget ({remaining_budget:.2f}s). Rotating key early."
                                 )

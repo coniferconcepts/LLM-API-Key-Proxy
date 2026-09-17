@@ -74,6 +74,7 @@ def make_client(tmp_path: Path, *, acquire_timeout: float) -> tuple[RotatingClie
     client.provider_config = _IdentityProviderConfig()
     client.abort_on_callback_error = True
     client._litellm_logger_callback = lambda *_args, **_kwargs: None
+    client.litellm_shared_session = None
     return client, manager
 
 

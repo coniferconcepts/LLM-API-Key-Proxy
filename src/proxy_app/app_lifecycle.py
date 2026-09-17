@@ -10,12 +10,14 @@ from typing import Any, AsyncIterator, Protocol
 
 import anyio
 from fastapi import FastAPI
+import aiohttp
 
 from proxy_app.oauth_bootstrap import (
     ProviderFactory,
     SafeExceptionLogger,
     initialize_oauth_credentials,
 )
+from rotator_library.cooldown_manager import _agent_debug_log
 
 
 class BackgroundRefresher(Protocol):
@@ -28,6 +30,8 @@ class RotatingClientRuntime(Protocol):
     all_credentials: Mapping[str, list[str]]
     http_client: Any
     background_refresher: BackgroundRefresher
+    litellm_shared_session: Any
+    trust_env: bool
 
     async def close(self) -> None: ...
 
@@ -117,6 +121,19 @@ def _restore_litellm_session(
         litellm.aclient_session = previous_session
 
 
+async def _drop_litellm_async_httpx_cache(litellm_module: Any) -> None:
+    closer = getattr(litellm_module, "close_litellm_async_clients", None)
+    if callable(closer):
+        try:
+            await closer()
+        except Exception:
+            pass
+    cache = getattr(litellm_module, "in_memory_llm_clients_cache", None)
+    cache_dict = getattr(cache, "cache_dict", None) if cache is not None else None
+    if isinstance(cache_dict, dict):
+        cache_dict.clear()
+
+
 @asynccontextmanager
 async def application_lifespan(
     app: FastAPI,
@@ -131,6 +148,7 @@ async def application_lifespan(
     previous_session: Any = None
     owned_session: Any = None
     session_replaced = False
+    aiohttp_session: Any = None
     local_transport_safe_mode = dependencies.local_transport_safe_mode_enabled()
     app.state.embedding_batcher = None
     app.state.model_info_service = None
@@ -190,6 +208,21 @@ async def application_lifespan(
         if not local_transport_safe_mode:
             model_info = await dependencies.init_model_info_service()
             app.state.model_info_service = model_info
+            trust_env = bool(getattr(client, "trust_env", True))
+            aiohttp_session = aiohttp.ClientSession(trust_env=trust_env)
+            client.litellm_shared_session = aiohttp_session
+            # region agent log
+            _agent_debug_log(
+                "B",
+                "app_lifecycle.py:application_lifespan",
+                "owned aiohttp session; aclient_session unchanged",
+                {
+                    "aclient_session_is_httpx": type(dependencies.litellm.aclient_session).__name__,
+                    "shared_session_id": id(aiohttp_session),
+                    "trust_env": trust_env,
+                },
+            )
+            # endregion
         else:
             previous_session = dependencies.litellm.aclient_session
             owned_session = client.http_client
@@ -221,6 +254,42 @@ async def application_lifespan(
                 await _run_cleanup(
                     client.close,
                     "rotating client",
+                    dependencies.log_safe_exception,
+                    cleanup_errors,
+                )
+            if aiohttp_session is not None:
+
+                async def _close_owned_aiohttp() -> None:
+                    await aiohttp_session.close()
+                    if client is not None:
+                        client.litellm_shared_session = None
+                    await _drop_litellm_async_httpx_cache(dependencies.litellm)
+                    # region agent log
+                    _agent_debug_log(
+                        "E",
+                        "app_lifecycle.py:application_lifespan",
+                        "closed owned aiohttp session and dropped LiteLLM cache",
+                        {
+                            "session_closed": bool(getattr(aiohttp_session, "closed", True)),
+                            "cache_size": len(
+                                getattr(
+                                    getattr(
+                                        dependencies.litellm,
+                                        "in_memory_llm_clients_cache",
+                                        None,
+                                    ),
+                                    "cache_dict",
+                                    {},
+                                )
+                                or {}
+                            ),
+                        },
+                    )
+                    # endregion
+
+                await _run_cleanup(
+                    _close_owned_aiohttp,
+                    "litellm shared aiohttp session",
                     dependencies.log_safe_exception,
                     cleanup_errors,
                 )

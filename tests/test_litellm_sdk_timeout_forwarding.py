@@ -34,5 +34,6 @@ def test_apply_litellm_timeout_forwards_streaming_read_default(default_read_time
 
 def test_sdk_acompletion_still_accepts_timeout_kwarg(default_read_timeouts):
     assert "timeout" in inspect.signature(litellm.acompletion).parameters
+    assert "shared_session" in inspect.signature(litellm.acompletion).parameters
     forwarded = TimeoutConfig.apply_litellm_timeout({"stream": True})
     assert forwarded["timeout"] == TimeoutConfig.litellm_timeout_seconds(stream=True)

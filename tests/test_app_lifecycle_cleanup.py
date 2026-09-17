@@ -15,6 +15,8 @@ class FakeLiteLLM:
     aclient_session: Any
     set_verbose: bool = True
     drop_params: bool = False
+    in_memory_llm_clients_cache: Any = None
+    close_litellm_async_clients: Any = None
 
 
 def _dependencies(
@@ -46,6 +48,8 @@ def _dependencies(
             events.append("client.construct")
             self.all_credentials: dict[str, list[str]] = {}
             self.http_client = object()
+            self.litellm_shared_session = None
+            self.trust_env = bool(_kwargs.get("trust_env", True))
             self.background_refresher = Refresher()
 
         async def close(self) -> None:
@@ -178,3 +182,65 @@ async def test_cancellation_restores_session_and_closes_client_once() -> None:
 
     assert litellm.aclient_session is original_session
     assert events.count("client.close") == 1
+
+
+@pytest.mark.asyncio
+async def test_normal_mode_owns_and_closes_aiohttp_shared_session() -> None:
+    import aiohttp
+    from types import SimpleNamespace
+
+    events: list[str] = []
+    dependencies, litellm = _dependencies(events, safe_mode=False)
+    original_aclient = litellm.aclient_session
+    cache = SimpleNamespace(cache_dict={"async_httpx_client": object()})
+    litellm.in_memory_llm_clients_cache = cache
+    app = FastAPI()
+
+    async with application_lifespan(app, dependencies):
+        session = app.state.rotating_client.litellm_shared_session
+        assert isinstance(session, aiohttp.ClientSession)
+        assert session.closed is False
+        assert litellm.aclient_session is original_aclient
+
+    assert session.closed is True
+    assert app.state.rotating_client.litellm_shared_session is None
+    assert cache.cache_dict == {}
+
+
+@pytest.mark.asyncio
+async def test_second_lifespan_gets_a_fresh_aiohttp_session() -> None:
+    events_one: list[str] = []
+    events_two: list[str] = []
+    deps_one, _litellm_one = _dependencies(events_one, safe_mode=False)
+    deps_two, _litellm_two = _dependencies(events_two, safe_mode=False)
+    app_one = FastAPI()
+    app_two = FastAPI()
+    first = None
+
+    async with application_lifespan(app_one, deps_one):
+        first = app_one.state.rotating_client.litellm_shared_session
+    assert first is not None and first.closed is True
+
+    async with application_lifespan(app_two, deps_two):
+        second = app_two.state.rotating_client.litellm_shared_session
+        assert second is not first
+        assert second.closed is False
+
+    assert second.closed is True
+
+
+@pytest.mark.asyncio
+async def test_serving_exception_closes_aiohttp_session() -> None:
+    events: list[str] = []
+    dependencies, _litellm = _dependencies(events, safe_mode=False)
+    app = FastAPI()
+    session = None
+
+    with pytest.raises(RuntimeError, match="serving failed"):
+        async with application_lifespan(app, dependencies):
+            session = app.state.rotating_client.litellm_shared_session
+            events.append("serving")
+            raise RuntimeError("serving failed")
+
+    assert session is not None and session.closed is True
+    assert events[-4:] == ["refresher.stop", "batcher.stop", "client.close", "model.stop"]

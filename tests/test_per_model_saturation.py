@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -137,7 +139,9 @@ async def test_saturation_with_cooling_peer_is_busy(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cooling_only_is_credential_exhaustion(tmp_path: Path) -> None:
+async def test_cooling_only_is_credential_exhaustion(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     manager = _manager(tmp_path)
     manager._usage_data = {  # noqa: SLF001
         "fireworks-cooling": {"key_cooldown_until": time.time() + 60.0},
@@ -146,13 +150,17 @@ async def test_cooling_only_is_credential_exhaustion(tmp_path: Path) -> None:
     # Budget stays far below the 60s cooldown so fail-fast still classifies
     # exhaustion, but is long enough that pre-loop setup cannot skip the loop.
     deadline = time.time() + 1.0
-    with pytest.raises(NoAvailableKeysError) as captured:
-        await manager.acquire_key(
-            ["fireworks-cooling"],
-            "fireworks/model-a",
-            deadline,
-            acquire_deadline=deadline,
-            all_provider_credentials=["fireworks-cooling"],
-        )
+    with caplog.at_level(logging.WARNING, logger="rotator_library"):
+        with pytest.raises(NoAvailableKeysError) as captured:
+            await manager.acquire_key(
+                ["fireworks-cooling"],
+                "fireworks/model-a",
+                deadline,
+                acquire_deadline=deadline,
+                all_provider_credentials=["fireworks-cooling"],
+            )
 
     assert captured.value.category == "proxy_all_credentials_exhausted"
+    remainders = re.findall(r"only (-?[0-9.]+)s budget remaining", caplog.text)
+    assert remainders
+    assert all(float(value) >= 0.0 for value in remainders)
