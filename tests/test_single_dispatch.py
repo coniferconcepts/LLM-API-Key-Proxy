@@ -211,6 +211,8 @@ def test_chat_endpoint_single_dispatch_auth_and_binding(
             "model": "chutes/moonshotai/Kimi-K3-TEE",
             "messages": [{"role": "user", "content": "synthetic"}],
             "stream": False,
+            "max_completion_tokens": 2048,
+            "extra_body": {"reasoning_effort": "low"},
         }
 
         async def loopback_app(scope: dict, receive: object, send: object) -> None:
@@ -258,6 +260,11 @@ def test_chat_endpoint_single_dispatch_auth_and_binding(
             assert trusted.status_code not in {401, 403}
             assert len(provider.posts) == 1, (trusted.status_code, trusted.json().get("detail"))
             assert provider.posts[0].path == "/v1/chat/completions"
+            wire = provider.posts[0].body
+            assert wire["max_tokens"] == 2048
+            assert wire["reasoning_effort"] == "low"
+            assert wire.get("stream", False) is False
+            assert "tools" not in wire
             assert catalog_attempts == []
 
 
