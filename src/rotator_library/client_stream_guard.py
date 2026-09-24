@@ -22,6 +22,8 @@ def _safe_request_headers(request: Any) -> dict[str, str]:
         "x-opencode-bounded-capability",
         "x-opencode-internal-bounded-capability",
         "x-opencode-internal-bounded-entry",
+        "x-mirrowel-single-dispatch",
+        "x-mirrowel-single-dispatch-token",
     }
     return {name: value for name, value in request.headers.items() if name.lower() not in blocked}
 

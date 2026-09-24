@@ -977,17 +977,43 @@ async def chat_completions(
             )
         except BoundedCampaignError:
             raise HTTPException(status_code=403, detail="bounded_request_rejected")
+        from rotator_library.single_dispatch import (
+            SINGLE_DISPATCH_HEADER,
+            SINGLE_DISPATCH_TOKEN_HEADER,
+            SingleDispatchGuard,
+            SingleDispatchRejected,
+            single_dispatch_requested,
+        )
+
+        try:
+            single_dispatch = single_dispatch_requested(
+                request,
+                request_data.get("model"),
+                authenticated=bool(_runtime_security_config.proxy_api_key),
+            )
+        except SingleDispatchRejected:
+            raise HTTPException(status_code=403, detail="single_dispatch_rejected")
         safe_headers = {
             name: value
             for name, value in request.headers.items()
             if name.lower()
-            not in {INTERNAL_ENTRY_HEADER, INTERNAL_CAPABILITY_HEADER, ATTEMPT_HEADER}
+            not in {
+                INTERNAL_ENTRY_HEADER,
+                INTERNAL_CAPABILITY_HEADER,
+                ATTEMPT_HEADER,
+                SINGLE_DISPATCH_HEADER,
+                SINGLE_DISPATCH_TOKEN_HEADER,
+            }
         }
 
         pre_request_callback = None
         if isinstance(bounded_authorization, BoundedAuthorization):
             ledger = DurableReservationLedger.from_environment()
             pre_request_callback = BoundedAttemptGuard(bounded_authorization, ledger)
+        if single_dispatch:
+            if pre_request_callback is not None or not client.abort_on_callback_error:
+                raise HTTPException(status_code=403, detail="single_dispatch_rejected")
+            pre_request_callback = SingleDispatchGuard()
 
         _ensure_local_transport_configuration_current()
         if _local_transport_runtime_policy.enabled:
