@@ -185,7 +185,7 @@ def test_chat_endpoint_single_dispatch_auth_and_binding(
     token = "synthetic-router-only-dispatch-token-32"
     with fake_provider(ProviderScenario(status=429)) as provider:
         catalog_attempts = _block_catalog_fetches(monkeypatch)
-        import rotator_library.model_info_service as model_info_service
+        from rotator_library import model_info_service
 
         async def no_background_catalog_load(_registry: object) -> None:
             return None
