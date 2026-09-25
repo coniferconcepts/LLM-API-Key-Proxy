@@ -13,6 +13,7 @@ import aiofiles
 import litellm
 
 from .error_handler import ClassifiedError, NoAvailableKeysError, mask_credential
+from .pricing import completion_cost_or_unknown
 from .cooldown_manager import remaining_budget_seconds
 from .providers import PROVIDER_PLUGINS
 from .utils.resilient_io import ResilientStateWriter
@@ -2680,14 +2681,14 @@ class UsageManager:
                         if isinstance(completion_response, litellm.EmbeddingResponse):
                             model_info = litellm.get_model_info(model)
                             input_cost = model_info.get("input_cost_per_token")
-                            if input_cost:
+                            if input_cost is not None:
                                 cost = completion_response.usage.prompt_tokens * input_cost
                             else:
                                 cost = None
                         else:
-                            cost = litellm.completion_cost(
-                                completion_response=completion_response, model=model
-                            )
+                            # Missing Chutes prices stay unknown instead of using
+                            # LiteLLM's synthesized zero-rate fallback.
+                            cost = completion_cost_or_unknown(completion_response, model)
 
                         if cost is not None:
                             usage_data_ref["approx_cost"] += cost
