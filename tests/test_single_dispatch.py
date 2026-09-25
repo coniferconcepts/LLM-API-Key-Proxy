@@ -68,6 +68,15 @@ def test_single_dispatch_requires_loopback_proxy_auth_alias_and_token(
     )
     with pytest.raises(SingleDispatchRejected):
         single_dispatch_requested(request, model, authenticated=True)
+    request.headers = Headers(
+        raw=[
+            (b"x-mirrowel-single-dispatch", b"1"),
+            (b"x-mirrowel-single-dispatch-token", b"\xe9" * 40),
+            (b"x-opencode-alias", b"kimi-k3-advisor"),
+        ]
+    )
+    with pytest.raises(SingleDispatchRejected):
+        single_dispatch_requested(request, model, authenticated=True)
     request.headers = headers
     with pytest.raises(SingleDispatchRejected):
         single_dispatch_requested(request, "chutes/moonshotai/Kimi-K3", authenticated=True)

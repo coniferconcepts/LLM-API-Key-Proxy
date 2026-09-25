@@ -30,7 +30,7 @@ def single_dispatch_requested(request: Any, model: Any, *, authenticated: bool) 
         or len(tokens) != 1
         or len(expected) < 32
         or not expected.isascii()
-        or not hmac.compare_digest(tokens[0], expected)
+        or not hmac.compare_digest(tokens[0].encode("utf-8"), expected.encode("ascii"))
         or request.headers.getlist(SINGLE_DISPATCH_ALIAS_HEADER) != ["kimi-k3-advisor"]
         or not authenticated
         or not peer_is_loopback
