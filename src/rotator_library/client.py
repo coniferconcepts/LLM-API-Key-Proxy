@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Mirrowel
 
 import asyncio
+from contextlib import aclosing
 import fnmatch
 import json
 import re
@@ -53,6 +54,7 @@ from .client_stream_guard import (
     _safe_request_headers as _safe_request_headers,
     require_async_stream_iterator,
 )
+from .stream_cleanup import close_stream_with_timeout
 from .routing_policy import RouteDecision, RoutingPolicy, RoutingPolicyError
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir
@@ -1215,6 +1217,11 @@ class RotatingClient:
         finally:
             # This block now runs regardless of how the stream terminates (completion, client disconnect, etc.).
             # The primary goal is to ensure usage is always logged internally.
+            if hasattr(stream, "aclose"):
+                try:
+                    await close_stream_with_timeout(stream, 1.0)
+                except Exception:  # noqa: BLE001 - close errors must not retain the credential
+                    lib_logger.warning("Could not close upstream response stream")
             await self.usage_manager.release_key(key, model)
             lib_logger.info("Upstream stream finished and credential lock released.")
 
@@ -1266,6 +1273,8 @@ class RotatingClient:
                                 f"TransactionLogger: Failed to parse chunk: {content[:100]}"
                             )
         finally:
+            if hasattr(stream, "aclose"):
+                await stream.aclose()
             # Assemble and log final response after stream ends
             if transaction_logger and chunks:
                 try:
@@ -1273,7 +1282,7 @@ class RotatingClient:
                         chunks, request_data
                     )
                     transaction_logger.log_response(final_response)
-                except Exception:
+                except Exception:  # noqa: BLE001 - logging must not break the response
                     lib_logger.warning("TransactionLogger: Failed to assemble/log final response")
 
     async def _maybe_start_provider_cooldown_on_rate_limit(
@@ -1568,7 +1577,7 @@ class RotatingClient:
                             if pre_request_callback:
                                 try:
                                     await pre_request_callback(request, litellm_kwargs)
-                                except Exception:
+                                except Exception:  # noqa: BLE001 - callbacks are user supplied
                                     if self.abort_on_callback_error:
                                         raise PreRequestCallbackError(
                                             "Pre-request callback failed"
@@ -1793,7 +1802,7 @@ class RotatingClient:
                             if pre_request_callback:
                                 try:
                                     await pre_request_callback(request, litellm_kwargs)
-                                except Exception:
+                                except Exception:  # noqa: BLE001 - callbacks are user supplied
                                     if self.abort_on_callback_error:
                                         raise PreRequestCallbackError(
                                             "Pre-request callback failed"
@@ -2331,7 +2340,7 @@ class RotatingClient:
                                 if pre_request_callback:
                                     try:
                                         await pre_request_callback(request, litellm_kwargs)
-                                    except Exception:
+                                    except Exception:  # noqa: BLE001 - callbacks are user supplied
                                         if self.abort_on_callback_error:
                                             raise PreRequestCallbackError(
                                                 "Pre-request callback failed"
@@ -2363,8 +2372,9 @@ class RotatingClient:
                                     stream_generator, transaction_logger, kwargs
                                 )
 
-                                async for chunk in logged_stream:
-                                    yield chunk
+                                async with aclosing(logged_stream):
+                                    async for chunk in logged_stream:
+                                        yield chunk
                                 return
 
                             except (
@@ -2575,7 +2585,7 @@ class RotatingClient:
                             if pre_request_callback:
                                 try:
                                     await pre_request_callback(request, litellm_kwargs)
-                                except Exception:
+                                except Exception:  # noqa: BLE001 - callbacks are user supplied
                                     if self.abort_on_callback_error:
                                         raise PreRequestCallbackError(
                                             "Pre-request callback failed"
@@ -2623,8 +2633,9 @@ class RotatingClient:
                                 stream_generator, transaction_logger, kwargs
                             )
 
-                            async for chunk in logged_stream:
-                                yield chunk
+                            async with aclosing(logged_stream):
+                                async for chunk in logged_stream:
+                                    yield chunk
                             return
 
                         except (

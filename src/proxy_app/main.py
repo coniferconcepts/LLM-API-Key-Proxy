@@ -1097,7 +1097,7 @@ async def chat_completions(
         is_streaming = request_data.get("stream", False)
         model_name = request_data.get("model")
         limiter = request.app.state.model_admission_limiter
-        admission_acquired = await limiter.acquire(model_name)
+        admission_acquired = await limiter.acquire(model_name, request.is_disconnected)
 
         if is_streaming:
             try:
@@ -1214,7 +1214,7 @@ async def anthropic_messages(
         )
 
         limiter = request.app.state.model_admission_limiter
-        admission_acquired = await limiter.acquire(body.model)
+        admission_acquired = await limiter.acquire(body.model, request.is_disconnected)
         try:
             # Use the library method to handle the request
             result = await client.anthropic_messages(body, raw_request=request)

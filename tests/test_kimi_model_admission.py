@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 import sys
@@ -96,5 +97,26 @@ async def test_limiter_only_applies_to_exact_kimi_model() -> None:
     limiter = ModelAdmissionLimiter(limit=1)
     assert not await limiter.acquire("chutes/deepseek-ai/DeepSeek-V4-Flash-0731-TEE")
     assert not await limiter.acquire("chutes/moonshotai/Kimi-K3")
+    assert await limiter.acquire(limiter.MODEL)
+    await limiter.release(True)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_while_waiting_for_kimi_permit() -> None:
+    limiter = ModelAdmissionLimiter(limit=1, wait_seconds=1)
+    assert await limiter.acquire(limiter.MODEL)
+    disconnected = asyncio.Event()
+
+    async def is_disconnected() -> bool:
+        return disconnected.is_set()
+
+    waiting = asyncio.create_task(limiter.acquire(limiter.MODEL, is_disconnected))
+    await asyncio.sleep(0)
+    assert not waiting.done()
+    disconnected.set()
+    with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+        await asyncio.wait_for(waiting, timeout=0.2)
+
+    await limiter.release(True)
     assert await limiter.acquire(limiter.MODEL)
     await limiter.release(True)

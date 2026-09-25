@@ -75,7 +75,8 @@ class ModelAdmissionLimiter:
     """Bound concurrency for the Kimi Chutes model at the proxy boundary."""
 
     MODEL = "chutes/moonshotai/Kimi-K3-TEE"
-    # DeepSeek Flash shares the Chutes account bucket and is outside this limiter.
+    # DeepSeek Flash shares Kimi's Chutes account concurrency bucket; this limiter
+    # only covers Kimi, so Flash calls can still use that account capacity.
     DEFAULT_LIMIT = 4
     DEFAULT_WAIT_SECONDS = 5.0
 
@@ -96,13 +97,17 @@ class ModelAdmissionLimiter:
         self._active = 0
         self._lock = asyncio.Lock()
 
-    async def acquire(self, model: str) -> bool:
+    async def acquire(
+        self, model: str, is_disconnected: Callable[[], Awaitable[bool]] | None = None
+    ) -> bool:
         """Acquire a permit for the target model; other models pass through."""
         if model != self.MODEL:
             return False
 
         deadline = self._clock() + self.wait_seconds
         while True:
+            if is_disconnected is not None and await is_disconnected():
+                raise asyncio.CancelledError("client disconnected while waiting for Kimi admission")
             async with self._lock:
                 if self._active < self.limit:
                     self._active += 1

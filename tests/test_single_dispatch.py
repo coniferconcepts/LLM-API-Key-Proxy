@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sys
 import threading
@@ -21,12 +22,26 @@ from credential_admission_contract_support import make_client
 from test_local_transport_safe_mode import _block_catalog_fetches, _import_proxy_main
 
 from rotator_library.error_handler import NoAvailableKeysError, PreRequestCallbackError
+import rotator_library.client as client_module
 from rotator_library.provider_config import ProviderConfig
 from rotator_library.single_dispatch import (
     SingleDispatchGuard,
     SingleDispatchRejected,
     single_dispatch_requested,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_litellm_session(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "aclient_session", None)
+
+
+def test_client_import_uses_requested_mirrowel_tree() -> None:
+    tree = os.environ.get("MIRROWEL_TEST_TREE")
+    if tree is None:
+        pytest.skip("MIRROWEL_TEST_TREE is not set")
+    expected = Path(tree).resolve() / "src/rotator_library/client.py"
+    assert Path(client_module.__file__).resolve() == expected
 
 
 def test_single_dispatch_rejection_reason_omits_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,6 +216,73 @@ async def test_single_dispatch_physical_post_budget_across_litellm_and_rotation(
         assert catalog_attempts == []
     finally:
         release_response.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_disconnected_stream_closes_fake_provider_socket(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider_closed = threading.Event()
+    posts: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:
+            posts.append(self.path)
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            chunk = {
+                "id": "chatcmpl-synthetic",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "moonshotai/Kimi-K3-TEE",
+                "choices": [
+                    {"index": 0, "delta": {"content": "first"}, "finish_reason": None}
+                ],
+            }
+            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.wfile.flush()
+            self.connection.settimeout(3)
+            try:
+                if self.rfile.read(1) == b"":
+                    provider_closed.set()
+            except (ConnectionResetError, OSError):
+                provider_closed.set()
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("CHUTES_API_BASE", f"http://127.0.0.1:{server.server_port}/v1")
+        _block_catalog_fetches(monkeypatch)
+        client, _manager = make_client(tmp_path, acquire_timeout=0.2)
+        client.all_credentials = {"chutes": ["synthetic-only"]}
+        client.max_concurrent_requests_per_key = {"chutes": 1}
+        client.provider_config = ProviderConfig()
+        client.litellm_provider_params = {"chutes": {}}
+        stream = client.acompletion(
+            model="chutes/moonshotai/Kimi-K3-TEE",
+            messages=[{"role": "user", "content": "synthetic"}],
+            stream=True,
+            request_timeout=2,
+        )
+        try:
+            assert "first" in await asyncio.wait_for(anext(stream), timeout=3)
+        finally:
+            await stream.aclose()
+        assert await asyncio.to_thread(provider_closed.wait, 2)
+        assert posts == ["/v1/chat/completions"]
+    finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
