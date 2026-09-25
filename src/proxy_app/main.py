@@ -188,6 +188,7 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
 print("  → Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from rotator_library import RotatingClient
+    from rotator_library.cooldown_manager import ModelAdmissionLimiter
     from rotator_library.bounded_campaign import (
         ATTEMPT_HEADER,
         BoundedAttemptGuard,
@@ -544,6 +545,7 @@ async def lifespan(app: FastAPI):
 
 # --- FastAPI App Setup ---
 app = FastAPI(lifespan=lifespan)
+app.state.model_admission_limiter = ModelAdmissionLimiter()
 
 
 @app.exception_handler(HTTPException)
@@ -1088,23 +1090,38 @@ async def chat_completions(
             request_data=request_data,
         )
         is_streaming = request_data.get("stream", False)
+        model_name = request_data.get("model")
+        limiter = request.app.state.model_admission_limiter
+        admission_acquired = await limiter.acquire(model_name)
 
         if is_streaming:
-            response_generator = client.acompletion(
-                request=request,
-                pre_request_callback=pre_request_callback,
-                **request_data,
-            )
-            return StreamingResponse(
-                streaming_response_wrapper(request, request_data, response_generator, raw_logger),
-                media_type="text/event-stream",
-            )
+            try:
+                response_generator = client.acompletion(
+                    request=request,
+                    pre_request_callback=pre_request_callback,
+                    **request_data,
+                )
+                return StreamingResponse(
+                    streaming_response_wrapper(
+                        request,
+                        request_data,
+                        limiter.release_after_stream(response_generator, admission_acquired),
+                        raw_logger,
+                    ),
+                    media_type="text/event-stream",
+                )
+            except BaseException:
+                await limiter.release(admission_acquired)
+                raise
         else:
-            response = await client.acompletion(
-                request=request,
-                pre_request_callback=pre_request_callback,
-                **request_data,
-            )
+            try:
+                response = await client.acompletion(
+                    request=request,
+                    pre_request_callback=pre_request_callback,
+                    **request_data,
+                )
+            finally:
+                await limiter.release(admission_acquired)
             terminal_error = terminal_completion_error_response(response)
             if terminal_error is not None:
                 return terminal_error
@@ -1191,21 +1208,36 @@ async def anthropic_messages(
             request_data=body.model_dump(exclude_none=True),
         )
 
-        # Use the library method to handle the request
-        result = await client.anthropic_messages(body, raw_request=request)
+        limiter = request.app.state.model_admission_limiter
+        admission_acquired = await limiter.acquire(body.model)
+        try:
+            # Use the library method to handle the request
+            result = await client.anthropic_messages(body, raw_request=request)
+        except BaseException:
+            await limiter.release(admission_acquired)
+            raise
 
         if body.stream:
             # Streaming response
-            return StreamingResponse(
-                anthropic_streaming_response_wrapper(result, logger, request=request),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
-            )
+            try:
+                return StreamingResponse(
+                    anthropic_streaming_response_wrapper(
+                        limiter.release_after_stream(result, admission_acquired),
+                        logger,
+                        request=request,
+                    ),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            except BaseException:
+                await limiter.release(admission_acquired)
+                raise
         else:
+            await limiter.release(admission_acquired)
             # Non-streaming response
             if logger:
                 logger.log_final_response(
@@ -1217,6 +1249,8 @@ async def anthropic_messages(
 
     except HTTPException:
         raise
+    except NoAvailableKeysError as e:
+        return handle_credential_failure(e, logger)
     except (
         litellm.InvalidRequestError,
         ValueError,

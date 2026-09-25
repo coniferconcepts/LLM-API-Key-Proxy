@@ -1821,10 +1821,26 @@ class RotatingClient:
                             )
                             final_kwargs = self._attach_shared_session(final_kwargs)
 
-                            response = await api_call(
-                                **final_kwargs,
-                                logger_fn=self._litellm_logger_callback,
+                            call = asyncio.create_task(
+                                api_call(
+                                    **final_kwargs,
+                                    logger_fn=self._litellm_logger_callback,
+                                )
                             )
+                            try:
+                                while not call.done():
+                                    if request is not None and await request.is_disconnected():
+                                        call.cancel()
+                                        raise asyncio.CancelledError("client disconnected")
+                                    await asyncio.wait({call}, timeout=0.05)
+                                response = await call
+                            finally:
+                                if not call.done():
+                                    call.cancel()
+                                    try:
+                                        await call
+                                    except asyncio.CancelledError:
+                                        pass
 
                             await self.usage_manager.record_success(current_cred, model, response)
 

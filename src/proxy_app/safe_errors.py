@@ -118,6 +118,8 @@ def handle_credential_failure(
     retry_after = None
     if error.category == "proxy_all_credentials_exhausted":
         retry_after = retry_after_seconds_from_soonest(error.soonest_end)
+    elif error.category == "proxy_busy":
+        retry_after = getattr(error, "retry_after_seconds", None)
     public_body = build_public_stream_error(error.category, retry_after)
     response = credential_failure_response(
         error.category,

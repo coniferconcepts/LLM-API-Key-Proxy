@@ -3,8 +3,9 @@
 
 import asyncio
 import logging
+import math
 import time
-from typing import Collection, Dict, Iterable, Optional
+from typing import Awaitable, Callable, Collection, Dict, Iterable, Optional
 
 
 def has_untried_peer_credentials(
@@ -68,6 +69,71 @@ def raise_if_cooldown_exceeds_budget(remaining_cooldown: float, remaining_budget
         category="proxy_all_credentials_exhausted",
         soonest_end=time.time() + remaining_cooldown,
     )
+
+
+class ModelAdmissionLimiter:
+    """Bound concurrency for the Kimi Chutes model at the proxy boundary."""
+
+    MODEL = "chutes/moonshotai/Kimi-K3-TEE"
+    # DeepSeek Flash shares the Chutes account bucket and is outside this limiter.
+    DEFAULT_LIMIT = 4
+    DEFAULT_WAIT_SECONDS = 5.0
+
+    def __init__(
+        self,
+        *,
+        limit: int = DEFAULT_LIMIT,
+        wait_seconds: float = DEFAULT_WAIT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        if limit < 1 or wait_seconds < 0:
+            raise ValueError("limit must be positive and wait_seconds non-negative")
+        self.limit = limit
+        self.wait_seconds = wait_seconds
+        self._clock = clock
+        self._sleep = sleeper
+        self._active = 0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, model: str) -> bool:
+        """Acquire a permit for the target model; other models pass through."""
+        if model != self.MODEL:
+            return False
+
+        deadline = self._clock() + self.wait_seconds
+        while True:
+            async with self._lock:
+                if self._active < self.limit:
+                    self._active += 1
+                    return True
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                from .error_handler import NoAvailableKeysError
+
+                error = NoAvailableKeysError(
+                    "Kimi model admission limit reached.",
+                    code="model_admission_timeout",
+                    category="proxy_busy",
+                )
+                error.retry_after_seconds = max(1, math.ceil(self.wait_seconds))
+                raise error
+            await self._sleep(min(0.05, remaining))
+
+    async def release(self, acquired: bool) -> None:
+        """Release a previously acquired target-model permit exactly once."""
+        if not acquired:
+            return
+        async with self._lock:
+            self._active = max(0, self._active - 1)
+
+    async def release_after_stream(self, stream, acquired: bool):
+        """Yield a response stream and release its permit on close or failure."""
+        try:
+            async for chunk in stream:
+                yield chunk
+        finally:
+            await self.release(acquired)
 
 
 class CooldownManager:
