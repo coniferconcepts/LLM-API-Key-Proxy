@@ -1274,9 +1274,7 @@ class RotatingClient:
                     )
                     transaction_logger.log_response(final_response)
                 except Exception:
-                    lib_logger.warning(
-                        "TransactionLogger: Failed to assemble/log final response"
-                    )
+                    lib_logger.warning("TransactionLogger: Failed to assemble/log final response")
 
     async def _maybe_start_provider_cooldown_on_rate_limit(
         self,
@@ -1576,7 +1574,9 @@ class RotatingClient:
                                             "Pre-request callback failed"
                                         ) from None
                                     else:
-                                        lib_logger.warning("Pre-request callback failed; proceeding")
+                                        lib_logger.warning(
+                                            "Pre-request callback failed; proceeding"
+                                        )
 
                             response = await provider_plugin.acompletion(
                                 self.http_client, **litellm_kwargs
@@ -1799,7 +1799,9 @@ class RotatingClient:
                                             "Pre-request callback failed"
                                         ) from None
                                     else:
-                                        lib_logger.warning("Pre-request callback failed; proceeding")
+                                        lib_logger.warning(
+                                            "Pre-request callback failed; proceeding"
+                                        )
 
                             # Ensure provider-qualified model so OPENAI_API_BASE overrides apply.
                             raw_model = litellm_kwargs.get("model")

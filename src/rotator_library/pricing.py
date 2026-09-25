@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import litellm
 
-
 CHUTES_CATALOG_DATE = "2026-09-24"
 
 # Rates are dollars per token. These entries are pinned from the Chutes catalog;

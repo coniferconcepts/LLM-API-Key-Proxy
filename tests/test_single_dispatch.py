@@ -163,6 +163,7 @@ async def test_single_dispatch_physical_post_budget_across_litellm_and_rotation(
         monkeypatch.setenv("CHUTES_API_BASE", f"http://127.0.0.1:{server.server_port}/v1")
         catalog_attempts = _block_catalog_fetches(monkeypatch)
         client, _manager = make_client(tmp_path, acquire_timeout=0.2)
+
         async def record_failure(*_args: object, **_kwargs: object) -> None:
             return None
 
@@ -216,7 +217,9 @@ def test_chat_endpoint_single_dispatch_auth_and_binding(
         async def no_background_catalog_load(_registry: object) -> None:
             return None
 
-        monkeypatch.setattr(model_info_service.ModelRegistry, "_load_all_sources", no_background_catalog_load)
+        monkeypatch.setattr(
+            model_info_service.ModelRegistry, "_load_all_sources", no_background_catalog_load
+        )
         module = _import_proxy_main(monkeypatch, tmp_path, provider.api_base, safe_mode=False)
         monkeypatch.setenv("CHUTES_API_BASE", provider.api_base)
         monkeypatch.setenv("MIRROWEL_SINGLE_DISPATCH_TOKEN", token)

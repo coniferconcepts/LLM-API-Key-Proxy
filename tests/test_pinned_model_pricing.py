@@ -50,10 +50,7 @@ def test_double_prefixed_chutes_model_cost_is_unknown(monkeypatch: pytest.Monkey
     monkeypatch.setattr(litellm, "completion_cost", unexpected_cost_call)
 
     assert (
-        pricing.completion_cost_or_unknown(
-            object(), "chutes/chutes/moonshotai/Kimi-K3-TEE"
-        )
-        is None
+        pricing.completion_cost_or_unknown(object(), "chutes/chutes/moonshotai/Kimi-K3-TEE") is None
     )
 
 

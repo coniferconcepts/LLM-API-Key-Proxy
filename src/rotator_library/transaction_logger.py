@@ -184,9 +184,7 @@ class TransactionLogger:
             )
         return self._context
 
-    def log_request(
-        self, request_data: Dict[str, Any], filename: str = "request.json"
-    ) -> None:
+    def log_request(self, request_data: Dict[str, Any], filename: str = "request.json") -> None:
         """
         Log the request received by client.py.
 
@@ -274,9 +272,7 @@ class TransactionLogger:
         if self.log_dir:
             provider_dir = self.log_dir / "provider"
             try:
-                has_provider_logs = provider_dir.exists() and any(
-                    provider_dir.iterdir()
-                )
+                has_provider_logs = provider_dir.exists() and any(provider_dir.iterdir())
             except OSError:
                 has_provider_logs = False
 
@@ -421,9 +417,7 @@ class TransactionLogger:
                         if "name" in value and value["name"] is not None:
                             final_message["function_call"]["name"] += value["name"]
                         if "arguments" in value and value["arguments"] is not None:
-                            final_message["function_call"]["arguments"] += value[
-                                "arguments"
-                            ]
+                            final_message["function_call"]["arguments"] += value["arguments"]
 
                     else:  # Generic key handling for other data like 'reasoning'
                         if key == "role":
@@ -591,9 +585,7 @@ class AntigravityProviderLogger(ProviderLogger):
     retries and auto-fix attempts.
     """
 
-    def log_malformed_retry_request(
-        self, retry_num: int, payload: Dict[str, Any]
-    ) -> None:
+    def log_malformed_retry_request(self, retry_num: int, payload: Dict[str, Any]) -> None:
         """
         Log a malformed call retry request payload.
 
@@ -613,9 +605,7 @@ class AntigravityProviderLogger(ProviderLogger):
         """
         self._append_text(f"malformed_retry_{retry_num}_response.log", chunk + "\n")
 
-    def log_malformed_autofix(
-        self, tool_name: str, raw_args: str, fixed_json: str
-    ) -> None:
+    def log_malformed_autofix(self, tool_name: str, raw_args: str, fixed_json: str) -> None:
         """
         Log details of an auto-fixed malformed function call.
 

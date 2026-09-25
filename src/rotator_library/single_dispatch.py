@@ -38,7 +38,9 @@ def single_dispatch_requested(request: Any, model: Any, *, authenticated: bool) 
     if values != ["1"] or len(tokens) != 1:
         raise SingleDispatchRejected("single dispatch authorization rejected", "header_shape")
     if not token_ok:
-        raise SingleDispatchRejected("single dispatch authorization rejected", "token_missing_or_invalid")
+        raise SingleDispatchRejected(
+            "single dispatch authorization rejected", "token_missing_or_invalid"
+        )
     if request.headers.getlist(SINGLE_DISPATCH_ALIAS_HEADER) != ["kimi-k3-advisor"]:
         raise SingleDispatchRejected("single dispatch authorization rejected", "alias_mismatch")
     if not authenticated:
