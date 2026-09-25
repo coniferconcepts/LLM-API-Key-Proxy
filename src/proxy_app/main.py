@@ -224,6 +224,7 @@ with _console.status("[dim]Initializing proxy core...", spinner="dots"):
         OpenAIStreamPolicy,
         bounded_sse_stream,
     )
+    from rotator_library.log_redaction import filter_log_headers
     from rotator_library.stream_terminal import require_openai_terminal, sse_data_content
     from proxy_app.detailed_logger import RawIOLogger
 
@@ -991,7 +992,11 @@ async def chat_completions(
                 request_data.get("model"),
                 authenticated=bool(_runtime_security_config.proxy_api_key),
             )
-        except SingleDispatchRejected:
+        except SingleDispatchRejected as rejected:
+            logging.getLogger("rotator_library").warning(
+                "single_dispatch_rejected reason_class=%s",
+                rejected.reason_class,
+            )
             raise HTTPException(status_code=403, detail="single_dispatch_rejected")
         safe_headers = {
             name: value
@@ -1083,7 +1088,7 @@ async def chat_completions(
         # Log basic request info to console (this is a separate, simpler logger).
         log_request_to_console(
             url=str(request.url),
-            headers=safe_headers,
+            headers=filter_log_headers(safe_headers),
             client_info=(request.client.host, request.client.port),
             request_data=request_data,
         )
@@ -1167,7 +1172,7 @@ async def anthropic_messages(
     # Log raw Anthropic request if raw logging is enabled
     if logger:
         logger.log_request(
-            headers=dict(request.headers),
+            headers=filter_log_headers(request.headers),
             body=body.model_dump(exclude_none=True),
         )
 
@@ -1183,7 +1188,7 @@ async def anthropic_messages(
         # Log the request to console
         log_request_to_console(
             url=str(request.url),
-            headers=dict(request.headers),
+            headers=filter_log_headers(request.headers),
             client_info=(
                 request.client.host if request.client else "unknown",
                 request.client.port if request.client else 0,
@@ -1302,7 +1307,7 @@ async def embeddings(
 
         log_request_to_console(
             url=str(request.url),
-            headers=dict(request.headers),
+            headers=filter_log_headers(request.headers),
             client_info=(request.client.host, request.client.port),
             request_data=request_data,
         )

@@ -5,7 +5,8 @@
 """
 Raw I/O Logger for the Proxy Layer.
 
-This logger captures the UNMODIFIED HTTP request and response at the proxy boundary.
+This logger captures HTTP request and response data at the proxy boundary.
+Request headers are restricted to a safe allowlist in the log artifact.
 It is disabled by default and should only be enabled for debugging the proxy itself.
 
 Use this when you need to:
@@ -18,9 +19,9 @@ TransactionLogger in the rotator_library instead (enabled via --enable-request-l
 
 Directory structure:
     logs/raw_io/{YYYYMMDD_HHMMSS}_{request_id}/
-        request.json           # Unmodified incoming HTTP request
+        request.json           # Incoming HTTP request with filtered headers
         streaming_chunks.jsonl # If streaming mode
-        final_response.json    # Unmodified outgoing HTTP response
+        final_response.json    # Outgoing HTTP response with filtered headers
         metadata.json          # Summary metadata
 """
 
@@ -31,6 +32,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from rotator_library.log_redaction import filter_log_headers, redact_request_log_data
 from rotator_library.secure_log_domain import OwnerOnlyLogDomain
 from rotator_library.utils.paths import get_logs_dir
 
@@ -89,8 +91,8 @@ class RawIOLogger:
         request_data = {
             "request_id": self.request_id,
             "timestamp_utc": datetime.utcnow().isoformat(),
-            "headers": dict(headers),
-            "body": body,
+            "headers": filter_log_headers(headers),
+            "body": redact_request_log_data(body),
         }
         self._write_json("request.json", request_data)
 
@@ -118,7 +120,7 @@ class RawIOLogger:
             "timestamp_utc": datetime.utcnow().isoformat(),
             "status_code": status_code,
             "duration_ms": round(duration_ms),
-            "headers": dict(headers) if headers else None,
+            "headers": filter_log_headers(headers) if headers else None,
             "body": body,
         }
         self._write_json("final_response.json", response_data)

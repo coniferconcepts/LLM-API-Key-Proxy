@@ -29,6 +29,23 @@ from rotator_library.single_dispatch import (
 )
 
 
+def test_single_dispatch_rejection_reason_omits_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    canary = "canary-token-value-0123456789abcdef"
+    monkeypatch.setenv("MIRROWEL_SINGLE_DISPATCH_TOKEN", "expected-token-value-0123456789abcd")
+    headers = Headers(
+        {
+            "x-mirrowel-single-dispatch": "1",
+            "x-mirrowel-single-dispatch-token": canary,
+            "x-opencode-alias": "kimi-k3-advisor",
+        }
+    )
+    request = SimpleNamespace(headers=headers, client=SimpleNamespace(host="127.0.0.1"))
+    with pytest.raises(SingleDispatchRejected) as raised:
+        single_dispatch_requested(request, "chutes/moonshotai/Kimi-K3-TEE", authenticated=True)
+    assert raised.value.reason_class == "token_missing_or_invalid"
+    assert canary not in str(raised.value)
+
+
 def test_single_dispatch_requires_loopback_proxy_auth_alias_and_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
