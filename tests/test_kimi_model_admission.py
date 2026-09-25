@@ -63,7 +63,18 @@ async def test_stream_completion_exception_and_disconnect_recover_permit(finish:
         if finish == "complete":
             yield "last"
 
-    wrapped = limiter.release_after_stream(source(), acquired)
+    source_stream = source()
+    closed = False
+
+    async def watch_close():
+        nonlocal closed
+        try:
+            async for chunk in source_stream:
+                yield chunk
+        finally:
+            closed = True
+
+    wrapped = limiter.release_after_stream(watch_close(), acquired)
     assert await anext(wrapped) == "first"
     if finish == "complete":
         assert await anext(wrapped) == "last"
@@ -75,6 +86,7 @@ async def test_stream_completion_exception_and_disconnect_recover_permit(finish:
     else:
         await wrapped.aclose()
 
+    assert closed
     assert await limiter.acquire(model)
     await limiter.release(True)
 

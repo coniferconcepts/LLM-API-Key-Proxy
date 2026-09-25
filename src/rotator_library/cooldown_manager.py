@@ -128,11 +128,14 @@ class ModelAdmissionLimiter:
             self._active = max(0, self._active - 1)
 
     async def release_after_stream(self, stream, acquired: bool):
-        """Yield a response stream and release its permit on close or failure."""
+        """Yield a response stream, close it, and release its permit."""
         try:
             async for chunk in stream:
                 yield chunk
         finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
             await self.release(acquired)
 
 
