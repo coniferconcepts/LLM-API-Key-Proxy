@@ -1273,9 +1273,9 @@ class RotatingClient:
                         chunks, request_data
                     )
                     transaction_logger.log_response(final_response)
-                except Exception as e:
+                except Exception:
                     lib_logger.warning(
-                        f"TransactionLogger: Failed to assemble/log final response: {e}"
+                        "TransactionLogger: Failed to assemble/log final response"
                     )
 
     async def _maybe_start_provider_cooldown_on_rate_limit(
@@ -1570,15 +1570,13 @@ class RotatingClient:
                             if pre_request_callback:
                                 try:
                                     await pre_request_callback(request, litellm_kwargs)
-                                except Exception as e:
+                                except Exception:
                                     if self.abort_on_callback_error:
                                         raise PreRequestCallbackError(
-                                            f"Pre-request callback failed: {e}"
-                                        ) from e
+                                            "Pre-request callback failed"
+                                        ) from None
                                     else:
-                                        lib_logger.warning(
-                                            f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
-                                        )
+                                        lib_logger.warning("Pre-request callback failed; proceeding")
 
                             response = await provider_plugin.acompletion(
                                 self.http_client, **litellm_kwargs
@@ -1795,15 +1793,13 @@ class RotatingClient:
                             if pre_request_callback:
                                 try:
                                     await pre_request_callback(request, litellm_kwargs)
-                                except Exception as e:
+                                except Exception:
                                     if self.abort_on_callback_error:
                                         raise PreRequestCallbackError(
-                                            f"Pre-request callback failed: {e}"
-                                        ) from e
+                                            "Pre-request callback failed"
+                                        ) from None
                                     else:
-                                        lib_logger.warning(
-                                            f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
-                                        )
+                                        lib_logger.warning("Pre-request callback failed; proceeding")
 
                             # Ensure provider-qualified model so OPENAI_API_BASE overrides apply.
                             raw_model = litellm_kwargs.get("model")
@@ -2333,15 +2329,14 @@ class RotatingClient:
                                 if pre_request_callback:
                                     try:
                                         await pre_request_callback(request, litellm_kwargs)
-                                    except Exception as e:
+                                    except Exception:
                                         if self.abort_on_callback_error:
                                             raise PreRequestCallbackError(
-                                                f"Pre-request callback failed: {e}"
-                                            ) from e
+                                                "Pre-request callback failed"
+                                            ) from None
                                         else:
                                             lib_logger.warning(
-                                                "Pre-request callback failed error_type=%s; proceeding.",
-                                                type(e).__name__,
+                                                "Pre-request callback failed; proceeding"
                                             )
 
                                 response = await provider_plugin.acompletion(
@@ -2578,15 +2573,14 @@ class RotatingClient:
                             if pre_request_callback:
                                 try:
                                     await pre_request_callback(request, litellm_kwargs)
-                                except Exception as e:
+                                except Exception:
                                     if self.abort_on_callback_error:
                                         raise PreRequestCallbackError(
-                                            f"Pre-request callback failed: {e}"
-                                        ) from e
+                                            "Pre-request callback failed"
+                                        ) from None
                                     else:
                                         lib_logger.warning(
-                                            "Pre-request callback failed error_type=%s; proceeding.",
-                                            type(e).__name__,
+                                            "Pre-request callback failed; proceeding"
                                         )
 
                             # lib_logger.info(f"DEBUG: litellm.acompletion kwargs: {litellm_kwargs}")

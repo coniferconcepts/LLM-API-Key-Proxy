@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
+from .log_redaction import filter_log_headers, redact_request_log_data
 from .utils.paths import get_logs_dir
 
 lib_logger = logging.getLogger("rotator_library")
@@ -201,7 +202,7 @@ class TransactionLogger:
         data = {
             "request_id": self.request_id,
             "timestamp_utc": datetime.utcnow().isoformat(),
-            "data": request_data,
+            "data": redact_request_log_data(request_data),
         }
         self._write_json(filename, data)
 
@@ -249,7 +250,7 @@ class TransactionLogger:
             "timestamp_utc": datetime.utcnow().isoformat(),
             "status_code": status_code,
             "duration_ms": round(duration_ms),
-            "headers": dict(headers) if headers else None,
+            "headers": filter_log_headers(headers) if headers else None,
             "data": response_data,
         }
         self._write_json(filename, data)
