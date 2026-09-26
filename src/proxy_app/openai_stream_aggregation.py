@@ -46,9 +46,9 @@ def aggregate_openai_chunks(
                         if "function" in tc_chunk:
                             if "name" in tc_chunk["function"]:
                                 if tc_chunk["function"]["name"] is not None:
-                                    aggregated_tool_calls[index]["function"][
-                                        "name"
-                                    ] += tc_chunk["function"]["name"]
+                                    aggregated_tool_calls[index]["function"]["name"] += tc_chunk[
+                                        "function"
+                                    ]["name"]
                             if "arguments" in tc_chunk["function"]:
                                 if tc_chunk["function"]["arguments"] is not None:
                                     aggregated_tool_calls[index]["function"][
@@ -66,9 +66,7 @@ def aggregate_openai_chunks(
                             final_message["function_call"]["name"] += value["name"]
                     if "arguments" in value:
                         if value["arguments"] is not None:
-                            final_message["function_call"]["arguments"] += value[
-                                "arguments"
-                            ]
+                            final_message["function_call"]["arguments"] += value["arguments"]
 
                 else:
                     if key == "role":

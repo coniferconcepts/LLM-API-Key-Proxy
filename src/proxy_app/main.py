@@ -732,8 +732,8 @@ async def streaming_response_wrapper(
         if response_chunks:
             # --- Aggregation Logic ---
             final_message = {"role": "assistant"}
-            aggregated_tool_calls, usage_data, finish_reason = (
-                aggregate_openai_chunks(response_chunks, final_message)
+            aggregated_tool_calls, usage_data, finish_reason = aggregate_openai_chunks(
+                response_chunks, final_message
             )
 
             # --- Final Response Construction ---
