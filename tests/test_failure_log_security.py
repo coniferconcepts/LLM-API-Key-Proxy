@@ -251,6 +251,7 @@ def test_log_directory_rejects_symlink_without_touching_target(tmp_path: Path) -
     # Given: the configured logs path redirects to an external sentinel directory.
     sentinel_dir = tmp_path / "sentinel"
     sentinel_dir.mkdir(mode=0o755)
+    sentinel_dir.chmod(0o755)  # Establish the sentinel mode independently of the host umask.
     sentinel_file = sentinel_dir / "external.log"
     sentinel_file.write_text("sentinel", encoding="utf-8")
     sentinel_file.chmod(0o644)

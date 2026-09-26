@@ -32,18 +32,14 @@ def apply_default_safety_settings(litellm_kwargs: Dict[str, Any], provider: str)
     ]
 
     # If generic form is present, ensure missing generic keys are filled in
-    if "safety_settings" in litellm_kwargs and isinstance(
-        litellm_kwargs["safety_settings"], dict
-    ):
+    if "safety_settings" in litellm_kwargs and isinstance(litellm_kwargs["safety_settings"], dict):
         for k, v in default_generic.items():
             if k not in litellm_kwargs["safety_settings"]:
                 litellm_kwargs["safety_settings"][k] = v
         return
 
     # If Gemini form is present, ensure missing gemini categories are appended
-    if "safetySettings" in litellm_kwargs and isinstance(
-        litellm_kwargs["safetySettings"], list
-    ):
+    if "safetySettings" in litellm_kwargs and isinstance(litellm_kwargs["safetySettings"], list):
         present = {
             item.get("category")
             for item in litellm_kwargs["safetySettings"]

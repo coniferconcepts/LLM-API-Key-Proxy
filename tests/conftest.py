@@ -19,14 +19,17 @@ def close_test_aiohttp_clients(monkeypatch: pytest.MonkeyPatch):
     yield
 
     if sessions:
+
         async def close_sessions() -> None:
             for session in sessions:
                 if not session.closed:
                     await session.close()
 
         asyncio.run(close_sessions())
-        import litellm
+    # Safe-mode clients use httpx only; their cached SDK clients must not survive
+    # the TestClient lifespan even when this test created no aiohttp session.
+    import litellm
 
-        cache = getattr(litellm.in_memory_llm_clients_cache, "cache_dict", None)
-        if isinstance(cache, dict):
-            cache.clear()
+    cache = getattr(litellm.in_memory_llm_clients_cache, "cache_dict", None)
+    if isinstance(cache, dict):
+        cache.clear()
