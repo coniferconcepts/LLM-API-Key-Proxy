@@ -13,10 +13,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from test_local_transport_safe_mode import _block_catalog_fetches, _import_proxy_main
+_transport_support = importlib.import_module("test_local_transport_safe_mode")
+_block_catalog_fetches = _transport_support._block_catalog_fetches
+_import_proxy_main = _transport_support._import_proxy_main
 
-from proxy_app import detailed_logger
-from rotator_library import transaction_logger
+detailed_logger = importlib.import_module("proxy_app.detailed_logger")
+transaction_logger = importlib.import_module("rotator_library.transaction_logger")
 
 CANARY = "fake-canary-request-log-7"
 
