@@ -3,11 +3,13 @@
 
 """Aggregate OpenAI streaming chunks for the final response log entry."""
 
+from typing import Any
+
 
 def aggregate_openai_chunks(
     response_chunks: list[dict], final_message: dict
 ) -> tuple[dict, dict | None, str | None]:
-    aggregated_tool_calls = {}
+    aggregated_tool_calls: dict[int, dict[str, Any]] = {}
     usage_data = None
     finish_reason = None
 

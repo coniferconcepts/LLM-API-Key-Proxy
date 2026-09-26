@@ -41,7 +41,7 @@ lib_logger = logging.getLogger("rotator_library")
 
 def _get_transactions_dir() -> Path:
     """Get the transactions log directory, creating it if needed."""
-    logs_dir = get_logs_dir()
+    logs_dir: Path = get_logs_dir()
     transactions_dir = logs_dir / "transactions"
     transactions_dir.mkdir(parents=True, exist_ok=True)
     return transactions_dir
@@ -303,8 +303,8 @@ class TransactionLogger:
 
         self._write_json("metadata.json", metadata)
 
-    def _extract_reasoning(self, response_data: Dict[str, Any]) -> Optional[str]:
-        """Recursively search for and extract 'reasoning' fields from response."""
+    def _extract_reasoning(self, response_data: Dict[str, Any]) -> object:
+        """Extract raw provider reasoning fields, including structured JSON values."""
         if not isinstance(response_data, dict):
             return None
 

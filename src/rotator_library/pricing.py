@@ -44,7 +44,8 @@ def completion_cost_or_unknown(response: object, model: str) -> float | None:
     """Calculate cost while preserving unknown Chutes prices as ``None``."""
     if is_unpriced_chutes_model(model):
         return None
-    return litellm.completion_cost(completion_response=response, model=model)
+    cost: float = litellm.completion_cost(completion_response=response, model=model)
+    return cost
 
 
 register_pinned_model_pricing()
