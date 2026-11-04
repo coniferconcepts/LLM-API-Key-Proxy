@@ -2186,6 +2186,39 @@ class RotatingClient:
         error_accumulator.model = model
         error_accumulator.provider = provider
 
+        async def fail_closed_stream(logged_stream, credential):
+            yielded_chunk = False
+            try:
+                async with aclosing(logged_stream):
+                    async for chunk in logged_stream:
+                        yielded_chunk = True
+                        yield chunk
+            except Exception as e:
+                if not yielded_chunk:
+                    raise
+                original_exc = getattr(e, "data", e)
+                classified_error = classify_error(original_exc, provider=provider)
+                await self.usage_manager.record_failure(
+                    credential,
+                    model,
+                    classified_error,
+                    increment_consecutive_failures=not isinstance(
+                        original_exc,
+                        (
+                            APIConnectionError,
+                            litellm.InternalServerError,
+                            litellm.ServiceUnavailableError,
+                        ),
+                    ),
+                )
+                lib_logger.warning(
+                    "Streaming request failed after a chunk category=%s status=%s; terminating.",
+                    classified_error.error_type,
+                    classified_error.status_code,
+                )
+                yield f"data: {json.dumps(build_public_stream_error('internal_error'))}\n\n"
+                yield "data: [DONE]\n\n"
+
         try:
             while len(tried_creds) < len(credentials_for_provider) and time.time() < deadline:
                 current_cred = None
@@ -2320,6 +2353,7 @@ class RotatingClient:
                                 logged_stream = self._transaction_logging_stream_wrapper(
                                     stream_generator, transaction_logger, kwargs
                                 )
+                                logged_stream = fail_closed_stream(logged_stream, current_cred)
 
                                 async with aclosing(logged_stream):
                                     async for chunk in logged_stream:
@@ -2581,6 +2615,7 @@ class RotatingClient:
                             logged_stream = self._transaction_logging_stream_wrapper(
                                 stream_generator, transaction_logger, kwargs
                             )
+                            logged_stream = fail_closed_stream(logged_stream, current_cred)
 
                             async with aclosing(logged_stream):
                                 async for chunk in logged_stream:
