@@ -1053,7 +1053,7 @@ async def chat_completions(
                 )
             finally:
                 await limiter.release(admission_acquired)
-            terminal_error = terminal_completion_error_response(response)
+            terminal_error = terminal_completion_error_response(response, raw_logger)
             if terminal_error is not None:
                 return terminal_error
             if raw_logger:

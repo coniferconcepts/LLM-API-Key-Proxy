@@ -90,5 +90,14 @@ def test_terminal_completion_error_response_rejects_noncanonical_error() -> None
     # When the completion result is inspected at the HTTP boundary.
     terminal = terminal_completion_error_response(response)
 
-    # Then it remains a normal completion result rather than being promoted to an HTTP error.
-    assert terminal is None
+    # Then it becomes an HTTP error with only the allowlisted public detail.
+    assert terminal is not None
+    assert terminal.status_code == 503
+    assert json.loads(terminal.body) == {
+        "detail": {
+            "type": "service_unavailable",
+            "code": "service_unavailable",
+            "status": 503,
+            "message": "The upstream service is unavailable.",
+        }
+    }

@@ -135,21 +135,35 @@ def handle_credential_failure(
     return response
 
 
-def terminal_completion_error_response(response: Any) -> JSONResponse | None:
-    if not isinstance(response, dict) or not isinstance(response.get("error"), dict):
+def terminal_completion_error_response(
+    response: Any,
+    logger: FinalResponseLogger | None = None,
+) -> JSONResponse | None:
+    if response is None:
+        status = 502
+        content = {"detail": public_error_detail(status)}
+    elif isinstance(response, dict) and isinstance(response.get("error"), dict):
+        error = response["error"]
+        classification = classify_credential_failure("proxy_all_credentials_exhausted")
+        if (
+            error.get("type") == classification.error_type
+            and error.get("code") == classification.code
+            and error.get("status") == classification.status
+        ):
+            status = classification.status
+            content = response
+        else:
+            status = error.get("status")
+            if error.get("type") == "proxy_timeout":
+                status = 504
+            elif not isinstance(status, int) or status not in {500, 502, 503, 504}:
+                status = 502
+            content = {"detail": public_error_detail(status)}
+    else:
         return None
-    error = response["error"]
-    classification = classify_credential_failure("proxy_all_credentials_exhausted")
-    if (
-        error.get("type") != classification.error_type
-        or error.get("code") != classification.code
-        or error.get("status") != classification.status
-    ):
-        return None
-    return credential_failure_response(
-        "proxy_all_credentials_exhausted",
-        content=response,
-    )
+    if logger is not None:
+        logger.log_final_response(status_code=status, headers=None, body=content)
+    return JSONResponse(status_code=status, content=content)
 
 
 class SafeUnhandledErrorMiddleware:
