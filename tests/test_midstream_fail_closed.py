@@ -67,10 +67,14 @@ async def collect(client):
 @pytest.mark.parametrize("failure", ["server", "quota"])
 async def test_midstream_error_stops_without_replaying(streaming_client, count, failure):
     client, upstream = streaming_client
-    error = server_error() if failure == "server" else client_module.litellm.RateLimitError(
-        message="private-provider-detail quota exceeded",
-        llm_provider="synthetic",
-        model=_MODEL,
+    error = (
+        server_error()
+        if failure == "server"
+        else client_module.litellm.RateLimitError(
+            message="private-provider-detail quota exceeded",
+            llm_provider="synthetic",
+            model=_MODEL,
+        )
     )
     upstream.side_effect = [response(count, error), response(1)]
 
@@ -119,7 +123,8 @@ async def test_error_before_first_chunk_still_rotates(streaming_client):
     ] == ["first-credential", "second-credential"]
     client.usage_manager.record_failure.assert_awaited_once()
     assert client.usage_manager.release_key.await_args_list == [
-        call("first-credential", _MODEL), call("second-credential", _MODEL)
+        call("first-credential", _MODEL),
+        call("second-credential", _MODEL),
     ]
 
 
