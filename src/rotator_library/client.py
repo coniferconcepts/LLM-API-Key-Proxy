@@ -56,6 +56,7 @@ from .client_stream_guard import (
 )
 from .gemini_safety_settings import apply_default_safety_settings
 from .stream_cleanup import close_stream_with_timeout
+from .stream_fail_closed import fail_closed_stream
 from .routing_policy import RouteDecision, RoutingPolicy, RoutingPolicyError
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir
@@ -2186,39 +2187,6 @@ class RotatingClient:
         error_accumulator.model = model
         error_accumulator.provider = provider
 
-        async def fail_closed_stream(logged_stream, credential):
-            yielded_chunk = False
-            try:
-                async with aclosing(logged_stream):
-                    async for chunk in logged_stream:
-                        yielded_chunk = True
-                        yield chunk
-            except Exception as e:
-                if not yielded_chunk:
-                    raise
-                original_exc = getattr(e, "data", e)
-                classified_error = classify_error(original_exc, provider=provider)
-                await self.usage_manager.record_failure(
-                    credential,
-                    model,
-                    classified_error,
-                    increment_consecutive_failures=not isinstance(
-                        original_exc,
-                        (
-                            APIConnectionError,
-                            litellm.InternalServerError,
-                            litellm.ServiceUnavailableError,
-                        ),
-                    ),
-                )
-                lib_logger.warning(
-                    "Streaming request failed after a chunk category=%s status=%s; terminating.",
-                    classified_error.error_type,
-                    classified_error.status_code,
-                )
-                yield f"data: {json.dumps(build_public_stream_error('internal_error'))}\n\n"
-                yield "data: [DONE]\n\n"
-
         try:
             while len(tried_creds) < len(credentials_for_provider) and time.time() < deadline:
                 current_cred = None
@@ -2342,18 +2310,16 @@ class RotatingClient:
 
                                 key_acquired = False
                                 stream_generator = self._safe_streaming_wrapper(
-                                    response,
-                                    current_cred,
-                                    model,
-                                    request,
-                                    provider_plugin,
+                                    response, current_cred, model, request, provider_plugin
                                 )
 
                                 # Wrap with transaction logging
                                 logged_stream = self._transaction_logging_stream_wrapper(
                                     stream_generator, transaction_logger, kwargs
                                 )
-                                logged_stream = fail_closed_stream(logged_stream, current_cred)
+                                logged_stream = fail_closed_stream(
+                                    logged_stream, current_cred, model, provider, self.usage_manager
+                                )
 
                                 async with aclosing(logged_stream):
                                     async for chunk in logged_stream:
@@ -2604,18 +2570,16 @@ class RotatingClient:
 
                             key_acquired = False
                             stream_generator = self._safe_streaming_wrapper(
-                                response,
-                                current_cred,
-                                model,
-                                request,
-                                provider_instance,
+                                response, current_cred, model, request, provider_instance
                             )
 
                             # Wrap with transaction logging
                             logged_stream = self._transaction_logging_stream_wrapper(
                                 stream_generator, transaction_logger, kwargs
                             )
-                            logged_stream = fail_closed_stream(logged_stream, current_cred)
+                            logged_stream = fail_closed_stream(
+                                logged_stream, current_cred, model, provider, self.usage_manager
+                            )
 
                             async with aclosing(logged_stream):
                                 async for chunk in logged_stream:
